@@ -290,6 +290,22 @@ object FirebaseManager {
                     put("vaultPath", device.vaultPath)
                     put("lastScan", device.lastScan)
                     put("lastSeen", System.currentTimeMillis())
+
+                    val foldersArr = JSONArray()
+                    for (sf in device.sharedFolders) {
+                        val sfObj = JSONObject().apply {
+                            put("folderId", sf.folderId)
+                            put("name", sf.name)
+                            put("pathOrUri", sf.pathOrUri)
+                            put("addedAt", sf.addedAt)
+                            put("fileCount", sf.fileCount)
+                            put("totalSizeBytes", sf.totalSizeBytes)
+                            put("lastScan", sf.lastScan)
+                            put("lastModified", sf.lastModified)
+                        }
+                        foldersArr.put(sfObj)
+                    }
+                    put("sharedFolders", foldersArr)
                 }
 
                 val req = Request.Builder()
@@ -378,7 +394,30 @@ object FirebaseManager {
                     vaultSizeBytes = devObj.optLong("vaultSizeBytes", 0L),
                     lastScan = devObj.optLong("lastScan", 0L)
                 )
-                map[devId] = hostDevice
+
+                val parsedFolders = mutableListOf<com.example.models.SharedFolder>()
+                val sfArr = devObj.optJSONArray("sharedFolders")
+                if (sfArr != null) {
+                    for (sfIdx in 0 until sfArr.length()) {
+                        val sfObj = sfArr.optJSONObject(sfIdx) ?: continue
+                        parsedFolders.add(
+                            com.example.models.SharedFolder(
+                                folderId = sfObj.optString("folderId", "f_$sfIdx"),
+                                name = sfObj.optString("name", "Shared Folder"),
+                                pathOrUri = sfObj.optString("pathOrUri", ""),
+                                addedAt = sfObj.optLong("addedAt", System.currentTimeMillis()),
+                                fileCount = sfObj.optInt("fileCount", 0),
+                                totalSizeBytes = sfObj.optLong("totalSizeBytes", 0L),
+                                lastScan = sfObj.optLong("lastScan", 0L),
+                                lastModified = sfObj.optLong("lastModified", 0L)
+                            )
+                        )
+                    }
+                }
+                // Preserve the exact order of addition as requested: "يظهرون في آدمين بترتيب اضافتهم"
+                parsedFolders.sortBy { it.addedAt }
+
+                map[devId] = hostDevice.copy(sharedFolders = parsedFolders)
             }
             _syncedDevices.value = map
         } catch (e: Exception) {
@@ -407,6 +446,7 @@ object FirebaseManager {
                         put("createdAt", f.createdAt)
                         put("hostDeviceId", f.hostDeviceId)
                         put("vaultId", f.vaultId)
+                        put("isBackedUp", f.isBackedUp)
                     }
                     filesArray.put(fileObj)
                 }
@@ -459,7 +499,8 @@ object FirebaseManager {
                         lastModified = obj.optLong("lastModified", 0L),
                         createdAt = obj.optLong("createdAt", 0L),
                         hostDeviceId = deviceId,
-                        vaultId = obj.optString("vaultId", "")
+                        vaultId = obj.optString("vaultId", ""),
+                        isBackedUp = obj.optBoolean("isBackedUp", false)
                     )
                 )
             }
@@ -470,6 +511,52 @@ object FirebaseManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching host files: ${e.message}")
             emptyList()
+        }
+    }
+
+    fun markFilesAsBackedUp(deviceId: String, backedUpFileIds: List<String>) {
+        val filesMap = _syncedFiles.value.toMutableMap()
+        val currentList = filesMap[deviceId]?.toMutableList() ?: return
+        val idSet = backedUpFileIds.toSet()
+
+        val updatedList = currentList.map { file ->
+            if (file.fileId in idSet || backedUpFileIds.isEmpty()) {
+                file.copy(isBackedUp = true)
+            } else {
+                file
+            }
+        }
+        filesMap[deviceId] = updatedList
+        _syncedFiles.value = filesMap
+
+        scope.launch {
+            try {
+                val filesArray = JSONArray()
+                for (f in updatedList) {
+                    val fileObj = JSONObject().apply {
+                        put("fileId", f.fileId)
+                        put("name", f.name)
+                        put("relativePath", f.relativePath)
+                        put("size", f.size)
+                        put("mimeType", f.mimeType)
+                        put("category", f.category)
+                        put("lastModified", f.lastModified)
+                        put("createdAt", f.createdAt)
+                        put("hostDeviceId", f.hostDeviceId)
+                        put("vaultId", f.vaultId)
+                        put("isBackedUp", f.isBackedUp)
+                    }
+                    filesArray.put(fileObj)
+                }
+
+                val putReq = Request.Builder()
+                    .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
+                    .put(filesArray.toString().toRequestBody(jsonMediaType))
+                    .build()
+                httpClient.newCall(putReq).execute()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error marking files as backed up in RTDB: ${e.message}")
+            }
         }
     }
 

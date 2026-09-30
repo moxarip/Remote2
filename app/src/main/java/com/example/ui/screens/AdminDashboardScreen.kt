@@ -76,6 +76,7 @@ fun AdminDashboardScreen(
     pairingCodeInput: String,
     pairingError: String?,
     currentUserEmail: String = "",
+    downloadedCount: Int = 0,
     onOpenAddDialog: () -> Unit,
     onCloseAddDialog: () -> Unit,
     onPairingCodeChanged: (String) -> Unit,
@@ -148,7 +149,7 @@ fun AdminDashboardScreen(
                     border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 16.dp)
+                        .padding(bottom = 12.dp)
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -180,6 +181,55 @@ fun AdminDashboardScreen(
                             fontSize = 12.sp,
                             lineHeight = 16.sp
                         )
+                    }
+                }
+            }
+
+            if (downloadedCount > 0) {
+                item {
+                    Surface(
+                        color = CyanAccent.copy(alpha = 0.12f),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyanAccent.copy(alpha = 0.35f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(CyanAccent.copy(alpha = 0.2f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Storage,
+                                    contentDescription = null,
+                                    tint = CyanAccent,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "ملفات محملة على هاتف الآدمن",
+                                    color = TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                Text(
+                                    text = "$downloadedCount ملفات محفوظة وجاهزة للاستعراض والمشاركة",
+                                    color = CyanAccent,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
                     }
                 }
             }

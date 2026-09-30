@@ -64,6 +64,7 @@ import com.example.ui.theme.RoseError
 import com.example.ui.theme.SlateBorder
 import com.example.ui.theme.SlateCard
 import com.example.ui.theme.SlateCardElevated
+import com.example.ui.theme.SlateDark
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
@@ -285,143 +286,225 @@ fun PairingCodeCard(
 fun CommandProgressCard(
     command: BackupCommand,
     onCancel: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onViewUploaded: (() -> Unit)? = null
 ) {
-    val isRunning = command.status == CommandStatus.RUNNING.name
+    val isRunning = command.status == CommandStatus.RUNNING.name || command.status == CommandStatus.PENDING.name
     val isCompleted = command.status == CommandStatus.COMPLETED.name
     val isFailed = command.status == CommandStatus.FAILED.name
+    val isBackup = command.type == "BACKUP"
 
     Card(
         colors = CardDefaults.cardColors(containerColor = SlateCardElevated),
         shape = RoundedCornerShape(16.dp),
         border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (isCompleted) EmeraldOnline.copy(alpha = 0.4f)
-            else if (isFailed) RoseError.copy(alpha = 0.4f)
-            else ElectricBlue.copy(alpha = 0.4f)
+            1.5.dp,
+            if (isCompleted) EmeraldOnline
+            else if (isFailed) RoseError
+            else ElectricBlue
         ),
         modifier = modifier
             .fillMaxWidth()
             .testTag("command_progress_card")
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
+            // Header Row
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = if (isCompleted) Icons.Default.CheckCircle else Icons.Default.Sync,
-                        contentDescription = "Status",
-                        tint = if (isCompleted) EmeraldOnline else ElectricBlue,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "${command.type} ${if (isCompleted) "COMPLETED ✓" else if (isFailed) "FAILED" else ""}",
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (isCompleted) EmeraldOnline.copy(alpha = 0.2f)
+                                else if (isFailed) RoseError.copy(alpha = 0.2f)
+                                else ElectricBlue.copy(alpha = 0.2f)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (isCompleted) Icons.Default.CheckCircle else Icons.Default.Sync,
+                            contentDescription = "Status",
+                            tint = if (isCompleted) EmeraldOnline else if (isFailed) RoseError else ElectricBlue,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = if (isBackup) "رفع الملفات إلى السحابة (UPLOAD)" else "${command.type} OPERATION",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = if (isCompleted) "✓ تم الرفع بنجاح (100%)"
+                            else if (isFailed) "✕ فشل الرفع"
+                            else if (command.status == CommandStatus.PENDING.name) "في انتظار استجابة الهوست..."
+                            else "جاري الرفع الآن إلى السحابة...",
+                            color = if (isCompleted) EmeraldOnline else if (isFailed) RoseError else AmberPending,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
 
                 if (isRunning) {
-                    IconButton(
+                    OutlinedButton(
                         onClick = onCancel,
-                        modifier = Modifier.size(28.dp).testTag("cancel_command_button")
+                        shape = RoundedCornerShape(8.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, RoseError.copy(alpha = 0.6f)),
+                        modifier = Modifier.testTag("cancel_command_button")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Cancel",
-                            tint = RoseError,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        Text("إلغاء", color = RoseError, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
 
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Large 0 to 100 Progress Line & Percentage Display
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Bottom
+            ) {
+                Column {
+                    Text(
+                        text = "خط التقدم (Progress):",
+                        color = TextMuted,
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = if (command.totalFiles > 0) "${command.filesProcessed} من أصل ${command.totalFiles} ملفات" else "جاري التحضير...",
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+                Text(
+                    text = "${command.progress}%",
+                    color = if (isCompleted) EmeraldOnline else ElectricBlue,
+                    fontWeight = FontWeight.ExtraBold,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 24.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Prominent 0 to 100 Progress Bar
+            LinearProgressIndicator(
+                progress = { (command.progress / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(5.dp)),
+                color = if (isCompleted) EmeraldOnline else ElectricBlue,
+                trackColor = SlateBorder
+            )
+
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Detailed telemetry: current file, speed, bytes
             if (isRunning) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "${command.filesProcessed} / ${command.totalFiles} files",
-                        color = TextSecondary,
-                        fontSize = 13.sp
-                    )
-                    Text(
-                        text = "${command.progress}%",
-                        color = ElectricBlue,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-                LinearProgressIndicator(
-                    progress = { (command.progress / 100f).coerceIn(0f, 1f) },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = ElectricBlue,
-                    trackColor = SlateBorder
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
                 if (!command.currentFile.isNullOrBlank()) {
-                    Text(
-                        text = "Current:",
-                        color = TextMuted,
-                        fontSize = 12.sp
-                    )
-                    Text(
-                        text = command.currentFile ?: "",
-                        color = TextPrimary,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1
-                    )
+                    Surface(
+                        color = SlateCard,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "الملف الحالي: ",
+                                color = TextMuted,
+                                fontSize = 11.sp
+                            )
+                            Text(
+                                text = command.currentFile ?: "",
+                                color = TextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
-
-                Spacer(modifier = Modifier.height(8.dp))
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
+                    if (command.totalBytes > 0) {
+                        Text(
+                            text = "${StorageUtils.formatFileSize(command.bytesTransferred)} / ${StorageUtils.formatFileSize(command.totalBytes)}",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    } else {
+                        Text(text = "الحالة: نشط", color = TextSecondary, fontSize = 12.sp)
+                    }
+
                     if (command.speedBytesPerSec > 0) {
                         Text(
-                            text = "Speed: ${StorageUtils.formatSpeed(command.speedBytesPerSec)}",
-                            color = TextSecondary,
-                            fontSize = 12.sp
+                            text = "⚡ ${StorageUtils.formatSpeed(command.speedBytesPerSec)}",
+                            color = ElectricBlue,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
-                    Text(
-                        text = "Status: ${command.status}",
-                        color = AmberPending,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
                 }
             } else if (isCompleted) {
-                Text(
-                    text = "${command.totalFiles} files processed (${StorageUtils.formatFileSize(command.totalBytes)})",
-                    color = EmeraldOnline,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium
-                )
+                Surface(
+                    color = EmeraldOnline.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "اكتملت العملية بنجاح! تم رفع جميع الملفات المحددة (${StorageUtils.formatFileSize(command.totalBytes)}) وأصبحت جاهزة للعرض والتنزيل.",
+                            color = EmeraldOnline,
+                            fontSize = 12.sp,
+                            lineHeight = 16.sp
+                        )
+                    }
+                }
+
+                if (onViewUploaded != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = onViewUploaded,
+                        colors = ButtonDefaults.buttonColors(containerColor = EmeraldOnline),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SlateDark, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("عرض وتنزيل الملفات المرفوعة", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
             } else if (isFailed) {
-                Text(
-                    text = command.error ?: "Operation failed",
-                    color = RoseError,
-                    fontSize = 13.sp
-                )
+                Surface(
+                    color = RoseError.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = command.error ?: "فشلت عملية الرفع. يرجى المحاولة مرة أخرى.",
+                        color = RoseError,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
             }
         }
     }

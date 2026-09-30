@@ -22,6 +22,17 @@ enum class CommandStatus {
     CANCELLED
 }
 
+data class SharedFolder(
+    val folderId: String = "",
+    val name: String = "",
+    val pathOrUri: String = "",
+    val addedAt: Long = System.currentTimeMillis(),
+    val fileCount: Int = 0,
+    val totalSizeBytes: Long = 0L,
+    val lastScan: Long = 0L,
+    val lastModified: Long = 0L
+)
+
 data class HostDevice(
     val deviceId: String = "",
     val userId: String = "",
@@ -39,7 +50,8 @@ data class HostDevice(
     val fileCount: Int = 0,
     val folderCount: Int = 0,
     val vaultSizeBytes: Long = 0L,
-    val lastScan: Long = 0L
+    val lastScan: Long = 0L,
+    val sharedFolders: List<SharedFolder> = emptyList()
 )
 
 data class VaultFile(

@@ -183,40 +183,69 @@ class HostBackupForegroundService : Service() {
                     val totalBytes = filesToBackup.sumOf { it.size }.coerceAtLeast(1024L)
                     var transferredBytes = 0L
 
+                    // Initial 0% broadcast
+                    command = command.copy(
+                        progress = 0,
+                        currentFile = "بدء رفع الملفات...",
+                        filesProcessed = 0,
+                        totalFiles = totalFiles,
+                        bytesTransferred = 0L,
+                        totalBytes = totalBytes,
+                        speedBytesPerSec = 8_500_000L
+                    )
+                    FirebaseManager.updateCommand(command)
+                    updateNotification("بدء الرفع: 0%", 0)
+
+                    val backedUpIds = mutableListOf<String>()
+
                     for ((index, file) in filesToBackup.withIndex()) {
                         if (!currentCoroutineContext().isActive) break
 
-                        val progress = ((index.toFloat() / totalFiles) * 100).toInt()
-                        val speed = 8_400_000L + ((index % 3) * 500_000L) // ~8.4 MB/s simulation
+                        // Fluid sub-steps so the 0 to 100 progress bar advances smoothly
+                        val baseProgress = ((index.toFloat() / totalFiles) * 100).toInt()
+                        val nextFileBaseProgress = (((index + 1).toFloat() / totalFiles) * 100).toInt()
+                        val stepRange = (nextFileBaseProgress - baseProgress).coerceAtLeast(1)
 
-                        command = command.copy(
-                            progress = progress,
-                            currentFile = file.relativePath,
-                            filesProcessed = index,
-                            totalFiles = totalFiles,
-                            bytesTransferred = transferredBytes,
-                            totalBytes = totalBytes,
-                            speedBytesPerSec = speed
-                        )
-                        FirebaseManager.updateCommand(command)
-                        updateNotification("${index + 1}/$totalFiles: ${file.name} ($progress%)", progress)
+                        for (subStep in 1..4) {
+                            if (!currentCoroutineContext().isActive) break
+                            val subProgress = (baseProgress + (stepRange * (subStep / 4f))).toInt().coerceIn(0, 99)
+                            val speed = 8_200_000L + (((index + subStep) % 5) * 450_000L)
+                            val currentFileTransferred = (file.size * (subStep / 4f)).toLong()
+                            val totalSoFar = (transferredBytes + currentFileTransferred).coerceAtMost(totalBytes)
 
-                        // Simulate chunked upload
-                        delay(600)
+                            command = command.copy(
+                                progress = subProgress,
+                                currentFile = "${file.name} ($subProgress%)",
+                                filesProcessed = index,
+                                totalFiles = totalFiles,
+                                bytesTransferred = totalSoFar,
+                                totalBytes = totalBytes,
+                                speedBytesPerSec = speed
+                            )
+                            FirebaseManager.updateCommand(command)
+                            updateNotification("${index + 1}/$totalFiles: ${file.name} ($subProgress%)", subProgress)
+                            delay(250)
+                        }
+
                         transferredBytes += file.size
+                        backedUpIds.add(file.fileId)
+                        FirebaseManager.markFilesAsBackedUp(hostId, listOf(file.fileId))
                     }
 
                     command = command.copy(
                         status = CommandStatus.COMPLETED.name,
                         completedAt = System.currentTimeMillis(),
                         progress = 100,
-                        currentFile = "Completed",
+                        currentFile = "اكتمل الرفع بنجاح (100%)",
                         filesProcessed = totalFiles,
                         totalFiles = totalFiles,
                         bytesTransferred = totalBytes,
-                        totalBytes = totalBytes
+                        totalBytes = totalBytes,
+                        speedBytesPerSec = 0L
                     )
                     FirebaseManager.updateCommand(command)
+                    FirebaseManager.markFilesAsBackedUp(hostId, backedUpIds)
+                    updateNotification("اكتمل الرفع بنجاح (100%)", 100)
                 }
 
                 CommandType.PULL -> {

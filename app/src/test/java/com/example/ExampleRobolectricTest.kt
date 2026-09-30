@@ -42,4 +42,77 @@ class ExampleRobolectricTest {
     assertEquals("HOST", com.example.models.DeviceRole.HOST.name)
     assertEquals("ADMIN", com.example.models.DeviceRole.ADMIN.name)
   }
+
+  @Test
+  fun `test admin downloads folder and file saving`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val folder = StorageUtils.getAdminDownloadsFolder(context)
+    assertTrue(folder.exists())
+
+    val vaultFile = com.example.models.VaultFile(
+        fileId = "test_f1",
+        name = "test_document.txt",
+        relativePath = "Documents/test_document.txt",
+        size = 1024L,
+        mimeType = "text/plain",
+        category = "Documents",
+        isBackedUp = true
+    )
+
+    val savedFile = StorageUtils.downloadFileToAdmin(context, vaultFile)
+    assertTrue(savedFile.exists())
+    assertEquals("test_document.txt", savedFile.name)
+
+    val downloadedList = StorageUtils.getAdminDownloadedFiles(context)
+    assertTrue(downloadedList.any { it.name == "test_document.txt" })
+  }
+
+  @Test
+  fun `test hierarchical folder partitioning and last modified sorting`() {
+    val files = listOf(
+        com.example.models.VaultFile(
+            fileId = "f1",
+            name = "root_file.txt",
+            relativePath = "root_file.txt",
+            lastModified = 1000L
+        ),
+        com.example.models.VaultFile(
+            fileId = "f2",
+            name = "newer_root.txt",
+            relativePath = "newer_root.txt",
+            lastModified = 5000L
+        ),
+        com.example.models.VaultFile(
+            fileId = "f3",
+            name = "photo1.jpg",
+            relativePath = "Photos/photo1.jpg",
+            lastModified = 2000L
+        ),
+        com.example.models.VaultFile(
+            fileId = "f4",
+            name = "photo2.jpg",
+            relativePath = "Photos/Vacation/photo2.jpg",
+            lastModified = 8000L
+        )
+    )
+
+    // At root path:
+    val (rootFolders, rootDirectFiles) = StorageUtils.getItemsForPath(files, "")
+    // Subfolders should only be "Photos"
+    assertEquals(1, rootFolders.size)
+    assertEquals("Photos", rootFolders[0].name)
+    assertEquals("Photos", rootFolders[0].relativePath)
+
+    // Direct files at root should be root_file.txt and newer_root.txt, sorted by lastModified descending!
+    assertEquals(2, rootDirectFiles.size)
+    assertEquals("newer_root.txt", rootDirectFiles[0].name)
+    assertEquals("root_file.txt", rootDirectFiles[1].name)
+
+    // Inside "Photos" subfolder:
+    val (photoSubfolders, photoDirectFiles) = StorageUtils.getItemsForPath(files, "Photos")
+    assertEquals(1, photoSubfolders.size)
+    assertEquals("Vacation", photoSubfolders[0].name)
+    assertEquals(1, photoDirectFiles.size)
+    assertEquals("photo1.jpg", photoDirectFiles[0].name)
+  }
 }

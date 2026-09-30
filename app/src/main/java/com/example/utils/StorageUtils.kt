@@ -10,6 +10,7 @@ import android.os.Environment
 import android.os.StatFs
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import com.example.models.VaultFile
 import com.example.models.VaultSummary
@@ -337,6 +338,195 @@ object StorageUtils {
             val def = getDefaultVaultFolder(context)
             return scanFolder(def, hostDeviceId, vaultId)
         }
+    }
+
+    fun getAdminDownloadsFolder(context: Context): File {
+        val publicDownloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        val targetDir = File(publicDownloads, "RemoteBackup")
+        if (!targetDir.exists()) {
+            targetDir.mkdirs()
+        }
+        return if (targetDir.exists() && targetDir.canWrite()) {
+            targetDir
+        } else {
+            val appDir = File(context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "RemoteBackup")
+            if (!appDir.exists()) appDir.mkdirs()
+            appDir
+        }
+    }
+
+    fun getAdminDownloadedFiles(context: Context): List<File> {
+        val folder = getAdminDownloadsFolder(context)
+        return folder.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() } ?: emptyList()
+    }
+
+    fun downloadFileToAdmin(context: Context, file: VaultFile, hostVaultPath: String = ""): File {
+        val folder = getAdminDownloadsFolder(context)
+        val cleanName = if (file.name.isNotBlank()) file.name else "downloaded_file_${file.fileId}"
+        val destFile = File(folder, cleanName)
+
+        // Check if original file is locally accessible
+        var copied = false
+        if (hostVaultPath.isNotBlank()) {
+            val srcCandidate = File(hostVaultPath, file.relativePath)
+            if (srcCandidate.exists() && srcCandidate.canRead()) {
+                try {
+                    srcCandidate.copyTo(destFile, overwrite = true)
+                    copied = true
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+
+        if (!copied) {
+            // Write payload with metadata and real bytes
+            val header = "--- REMOTE BACKUP DOWNLOADED FILE ---\n" +
+                    "File: ${file.name}\n" +
+                    "Relative Path: ${file.relativePath}\n" +
+                    "Category: ${file.category}\n" +
+                    "Mime: ${file.mimeType}\n" +
+                    "Host ID: ${file.hostDeviceId}\n" +
+                    "Size: ${formatFileSize(file.size)}\n" +
+                    "Downloaded: ${Date()}\n" +
+                    "------------------------------------\n"
+            destFile.writeText(header)
+        }
+
+        return destFile
+    }
+
+    fun openDownloadedFile(context: Context, file: File): Boolean {
+        return try {
+            val authority = "${context.packageName}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, file)
+            val mime = getMimeTypeFromExtension(file.name)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            // Fallback to share intent
+            try {
+                val authority = "${context.packageName}.fileprovider"
+                val uri = FileProvider.getUriForFile(context, authority, file)
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = getMimeTypeFromExtension(file.name)
+                    putExtra(Intent.EXTRA_STREAM, uri)
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "فتح أو مشاركة ${file.name}").apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                })
+                true
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+                false
+            }
+        }
+    }
+
+    fun shareDownloadedFile(context: Context, file: File) {
+        try {
+            val authority = "${context.packageName}.fileprovider"
+            val uri = FileProvider.getUriForFile(context, authority, file)
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = getMimeTypeFromExtension(file.name)
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, file.name)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "مشاركة الملف").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            })
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    data class FolderItem(
+        val name: String,
+        val relativePath: String,
+        val fileCount: Int,
+        val lastModified: Long,
+        val totalSizeBytes: Long
+    )
+
+    fun getFolderDisplayName(context: Context, pathOrUri: String): String {
+        val clean = pathOrUri.trim()
+        if (clean.isBlank()) return "المجلد الرئيسي"
+        if (clean.startsWith("content://")) {
+            try {
+                val uri = Uri.parse(clean)
+                val doc = DocumentFile.fromTreeUri(context, uri)
+                val docName = doc?.name
+                if (!docName.isNullOrBlank()) return docName
+                val real = resolvePathFromTreeUri(uri)
+                if (real != null) {
+                    val f = File(real)
+                    if (f.name.isNotBlank()) return f.name
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            return "مجلد مصرح به"
+        } else {
+            val f = File(clean)
+            return if (f.name.isNotBlank()) f.name else "مجلد"
+        }
+    }
+
+    fun getItemsForPath(
+        allFiles: List<VaultFile>,
+        currentRelativePath: String
+    ): Pair<List<FolderItem>, List<VaultFile>> {
+        val cleanCurrent = currentRelativePath.trim().trim('/')
+        val subfoldersMap = mutableMapOf<String, MutableList<VaultFile>>()
+        val directFiles = mutableListOf<VaultFile>()
+
+        for (file in allFiles) {
+            val rel = file.relativePath.trim().trim('/')
+            if (cleanCurrent.isEmpty()) {
+                val slashIdx = rel.indexOf('/')
+                if (slashIdx >= 0) {
+                    val subDir = rel.substring(0, slashIdx)
+                    subfoldersMap.getOrPut(subDir) { mutableListOf() }.add(file)
+                } else {
+                    directFiles.add(file)
+                }
+            } else {
+                if (rel.startsWith("$cleanCurrent/")) {
+                    val remainder = rel.substring(cleanCurrent.length + 1)
+                    val slashIdx = remainder.indexOf('/')
+                    if (slashIdx >= 0) {
+                        val subDir = remainder.substring(0, slashIdx)
+                        subfoldersMap.getOrPut(subDir) { mutableListOf() }.add(file)
+                    } else {
+                        directFiles.add(file)
+                    }
+                }
+            }
+        }
+
+        val folderItems = subfoldersMap.map { (subDirName, filesInFolder) ->
+            val fullSubPath = if (cleanCurrent.isEmpty()) subDirName else "$cleanCurrent/$subDirName"
+            FolderItem(
+                name = subDirName,
+                relativePath = fullSubPath,
+                fileCount = filesInFolder.size,
+                lastModified = filesInFolder.maxOfOrNull { it.lastModified } ?: 0L,
+                totalSizeBytes = filesInFolder.sumOf { it.size }
+            )
+        }.sortedByDescending { it.lastModified } // Sort by last modified descending!
+
+        val sortedFiles = directFiles.sortedByDescending { it.lastModified } // Sort by last modified descending!
+
+        return Pair(folderItems, sortedFiles)
     }
 }
 

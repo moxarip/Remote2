@@ -72,6 +72,8 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
     val activePairingCode by viewModel.activePairingCode.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
     val hostCommands by viewModel.hostCommands.collectAsState()
+    val hostSharedFolders by viewModel.hostSharedFolders.collectAsState()
+    val hostFiles by viewModel.hostFiles.collectAsState()
 
     // Admin states
     val pairedHosts by viewModel.pairedHosts.collectAsState()
@@ -84,6 +86,7 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
     val pairingDialogVisible by viewModel.pairingDialogVisible.collectAsState()
     val pairingInputCode by viewModel.pairingInputCode.collectAsState()
     val pairingError by viewModel.pairingError.collectAsState()
+    val adminDownloadedFiles by viewModel.adminDownloadedFiles.collectAsState()
 
     val authState by viewModel.authUiState.collectAsState()
 
@@ -164,9 +167,13 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                     selectedVaultPath = selectedVaultPath,
                     activePairingCode = activePairingCode,
                     commands = hostCommands,
+                    sharedFolders = hostSharedFolders,
+                    hostFiles = hostFiles,
                     isScanning = isScanning,
                     onScanVault = viewModel::scanHostVault,
                     onSelectVaultPath = viewModel::setVaultPath,
+                    onAddSharedFolder = viewModel::addSharedFolder,
+                    onRemoveSharedFolder = viewModel::removeSharedFolder,
                     onGeneratePairingCode = viewModel::generatePairingCode,
                     onCancelCommand = { cmdId -> viewModel.repository.cancelCommand(viewModel.repository.localDeviceId, cmdId) },
                     onNavigateSettings = { currentScreen = AppScreen.SETTINGS }
@@ -176,6 +183,7 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
             AppScreen.ADMIN_DASHBOARD -> {
                 LaunchedEffect(Unit) {
                     viewModel.refreshDevices()
+                    viewModel.refreshDownloadedFiles()
                 }
                 AdminDashboardScreen(
                     hosts = pairedHosts,
@@ -183,6 +191,7 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                     pairingCodeInput = pairingInputCode,
                     pairingError = pairingError,
                     currentUserEmail = currentUser?.email ?: "",
+                    downloadedCount = adminDownloadedFiles.size,
                     onOpenAddDialog = viewModel::openAddHostDialog,
                     onCloseAddDialog = viewModel::closeAddHostDialog,
                     onPairingCodeChanged = viewModel::onPairingInputCodeChanged,
@@ -204,6 +213,7 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                 selectedHost?.let { host ->
                     LaunchedEffect(host.deviceId) {
                         viewModel.refreshSelectedHostFiles()
+                        viewModel.refreshDownloadedFiles()
                     }
                     AdminHostDetailScreen(
                         host = host,
@@ -212,6 +222,7 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                         activeCommand = activeCommand,
                         selectedCategory = filterCategory,
                         searchQuery = searchQuery,
+                        downloadedFiles = adminDownloadedFiles,
                         onBack = {
                             viewModel.clearSelectedHost()
                             currentScreen = AppScreen.ADMIN_DASHBOARD
@@ -223,7 +234,15 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                         onClearSelection = viewModel::clearFileSelection,
                         onCategoryChanged = viewModel::setFilterCategory,
                         onSearchChanged = viewModel::setSearchQuery,
-                        onRefreshFiles = viewModel::refreshSelectedHostFiles
+                        onRefreshFiles = {
+                            viewModel.refreshSelectedHostFiles()
+                            viewModel.refreshDownloadedFiles()
+                        },
+                        onDownloadFile = viewModel::downloadFileToAdmin,
+                        onDownloadAllUploaded = viewModel::downloadAllUploadedFilesToAdmin,
+                        onOpenFile = viewModel::openDownloadedFile,
+                        onShareFile = viewModel::shareDownloadedFile,
+                        onDeleteDownloadedFile = viewModel::deleteDownloadedFile
                     )
                 } ?: run {
                     currentScreen = AppScreen.ADMIN_DASHBOARD

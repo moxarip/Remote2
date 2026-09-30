@@ -9,11 +9,14 @@ import com.example.models.CommandType
 import com.example.models.DeviceRole
 import com.example.models.HostDevice
 import com.example.models.PairingCodeData
+import com.example.models.SharedFolder
 import com.example.models.UserSession
 import com.example.models.VaultFile
 import com.example.models.VaultSummary
 import com.example.services.HostBackupForegroundService
 import com.example.utils.StorageUtils
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -42,6 +45,7 @@ class BackupRepository(private val context: Context) {
         private const val KEY_SAVED_HOST_EMAIL = "saved_host_email"
         private const val KEY_SAVED_HOST_DISPLAY_NAME = "saved_host_display_name"
         private const val KEY_SAVED_VAULT_PATH = "saved_vault_path"
+        private const val KEY_SAVED_SHARED_FOLDERS = "saved_shared_folders"
         private const val KEY_ADMIN_LAST_EMAIL = "admin_last_email"
     }
 
@@ -67,6 +71,9 @@ class BackupRepository(private val context: Context) {
     // Host specific state
     private val _currentHostDevice = MutableStateFlow<HostDevice?>(null)
     val currentHostDevice: StateFlow<HostDevice?> = _currentHostDevice.asStateFlow()
+
+    private val _sharedFolders = MutableStateFlow<List<SharedFolder>>(emptyList())
+    val sharedFolders: StateFlow<List<SharedFolder>> = _sharedFolders.asStateFlow()
 
     private val _activePairingCode = MutableStateFlow<PairingCodeData?>(null)
     val activePairingCode: StateFlow<PairingCodeData?> = _activePairingCode.asStateFlow()
@@ -107,9 +114,106 @@ class BackupRepository(private val context: Context) {
 
     init {
         FirebaseManager.init(context)
+        _sharedFolders.value = loadSavedSharedFolders()
         val defaultDir = StorageUtils.getDefaultVaultFolder(context)
         val savedVault = prefs.getString(KEY_SAVED_VAULT_PATH, null)
         _selectedVaultPath.value = if (!savedVault.isNullOrBlank()) savedVault else defaultDir.absolutePath
+    }
+
+    fun loadSavedSharedFolders(): List<SharedFolder> {
+        val jsonStr = prefs.getString(KEY_SAVED_SHARED_FOLDERS, null)
+        if (!jsonStr.isNullOrBlank()) {
+            try {
+                val arr = JSONArray(jsonStr)
+                val list = mutableListOf<SharedFolder>()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    list.add(
+                        SharedFolder(
+                            folderId = obj.optString("folderId", "f_$i"),
+                            name = obj.optString("name", "Shared Folder"),
+                            pathOrUri = obj.optString("pathOrUri", ""),
+                            addedAt = obj.optLong("addedAt", System.currentTimeMillis()),
+                            fileCount = obj.optInt("fileCount", 0),
+                            totalSizeBytes = obj.optLong("totalSizeBytes", 0L),
+                            lastScan = obj.optLong("lastScan", 0L),
+                            lastModified = obj.optLong("lastModified", 0L)
+                        )
+                    )
+                }
+                if (list.isNotEmpty()) return list
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        val defaultDir = StorageUtils.getDefaultVaultFolder(context)
+        val initialList = listOf(
+            SharedFolder(
+                folderId = "folder_default",
+                name = "المجلد الافتراضي (RemoteVault)",
+                pathOrUri = defaultDir.absolutePath,
+                addedAt = System.currentTimeMillis()
+            )
+        )
+        saveSharedFoldersInternal(initialList)
+        return initialList
+    }
+
+    private fun saveSharedFoldersInternal(folders: List<SharedFolder>) {
+        _sharedFolders.value = folders
+        try {
+            val arr = JSONArray()
+            for (f in folders) {
+                val obj = JSONObject().apply {
+                    put("folderId", f.folderId)
+                    put("name", f.name)
+                    put("pathOrUri", f.pathOrUri)
+                    put("addedAt", f.addedAt)
+                    put("fileCount", f.fileCount)
+                    put("totalSizeBytes", f.totalSizeBytes)
+                    put("lastScan", f.lastScan)
+                    put("lastModified", f.lastModified)
+                }
+                arr.put(obj)
+            }
+            prefs.edit().putString(KEY_SAVED_SHARED_FOLDERS, arr.toString()).apply()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun addSharedFolder(pathOrUri: String, customName: String? = null): SharedFolder {
+        val displayName = if (!customName.isNullOrBlank()) customName else StorageUtils.getFolderDisplayName(context, pathOrUri)
+        val folderId = "fld_${System.currentTimeMillis()}_${Random.nextInt(100, 999)}"
+        val newFolder = SharedFolder(
+            folderId = folderId,
+            name = displayName,
+            pathOrUri = pathOrUri,
+            addedAt = System.currentTimeMillis()
+        )
+        val currentList = _sharedFolders.value.toMutableList()
+        currentList.add(newFolder)
+        saveSharedFoldersInternal(currentList)
+        scanLocalVault()
+        return newFolder
+    }
+
+    fun removeSharedFolder(folderId: String) {
+        val currentList = _sharedFolders.value.toMutableList()
+        currentList.removeAll { it.folderId == folderId }
+        if (currentList.isEmpty()) {
+            val defaultDir = StorageUtils.getDefaultVaultFolder(context)
+            currentList.add(
+                SharedFolder(
+                    folderId = "folder_default",
+                    name = "المجلد الافتراضي (RemoteVault)",
+                    pathOrUri = defaultDir.absolutePath,
+                    addedAt = System.currentTimeMillis()
+                )
+            )
+        }
+        saveSharedFoldersInternal(currentList)
+        scanLocalVault()
     }
 
     fun getSavedRole(): DeviceRole {
@@ -162,7 +266,8 @@ class BackupRepository(private val context: Context) {
             vaultPath = _selectedVaultPath.value,
             batteryPercent = StorageUtils.getBatteryPercent(context),
             storageFreeBytes = freeBytes,
-            storageTotalBytes = totalBytes
+            storageTotalBytes = totalBytes,
+            sharedFolders = _sharedFolders.value
         )
         _currentHostDevice.value = host
         FirebaseManager.registerOrUpdateDevice(host)
@@ -260,7 +365,8 @@ class BackupRepository(private val context: Context) {
                 vaultPath = _selectedVaultPath.value,
                 batteryPercent = StorageUtils.getBatteryPercent(context),
                 storageFreeBytes = freeBytes,
-                storageTotalBytes = totalBytes
+                storageTotalBytes = totalBytes,
+                sharedFolders = _sharedFolders.value
             )
             _currentHostDevice.value = host
             FirebaseManager.registerOrUpdateDevice(host)
@@ -302,26 +408,58 @@ class BackupRepository(private val context: Context) {
 
     fun scanLocalVault() {
         val host = _currentHostDevice.value ?: return
-        val path = _selectedVaultPath.value
-        val (files, summary) = StorageUtils.scanVault(context, path, host.deviceId, host.vaultId)
+        val folders = _sharedFolders.value
 
-        _hostFiles.value = files
-        _vaultSummary.value = summary
+        val allFiles = mutableListOf<VaultFile>()
+        val updatedFolders = mutableListOf<SharedFolder>()
+        var totalFolderCount = 0
+
+        for (folder in folders) {
+            val (files, summary) = StorageUtils.scanVault(context, folder.pathOrUri, host.deviceId, folder.folderId)
+            allFiles.addAll(files)
+            totalFolderCount += summary.foldersFound
+
+            val latestMod = files.maxOfOrNull { it.lastModified } ?: summary.lastScanTime
+            updatedFolders.add(
+                folder.copy(
+                    fileCount = summary.filesFound,
+                    totalSizeBytes = summary.totalSizeBytes,
+                    lastScan = summary.lastScanTime,
+                    lastModified = latestMod
+                )
+            )
+        }
+
+        saveSharedFoldersInternal(updatedFolders)
+
+        val totalSizeBytes = allFiles.sumOf { it.size }
+        val overallSummary = VaultSummary(
+            filesFound = allFiles.size,
+            foldersFound = totalFolderCount,
+            totalSizeBytes = totalSizeBytes,
+            lastScanTime = System.currentTimeMillis(),
+            vaultPath = folders.firstOrNull()?.pathOrUri ?: ""
+        )
+
+        _hostFiles.value = allFiles
+        _vaultSummary.value = overallSummary
 
         val (freeBytes, totalBytes) = StorageUtils.getStorageStats()
         val updatedHost = host.copy(
-            fileCount = summary.filesFound,
-            folderCount = summary.foldersFound,
-            vaultSizeBytes = summary.totalSizeBytes,
-            lastScan = summary.lastScanTime,
+            fileCount = allFiles.size,
+            folderCount = totalFolderCount,
+            vaultSizeBytes = totalSizeBytes,
+            lastScan = overallSummary.lastScanTime,
             storageFreeBytes = freeBytes,
             storageTotalBytes = totalBytes,
             batteryPercent = StorageUtils.getBatteryPercent(context),
             lastSeen = System.currentTimeMillis(),
-            vaultPath = summary.vaultPath
+            vaultPath = overallSummary.vaultPath,
+            sharedFolders = updatedFolders
         )
         _currentHostDevice.value = updatedHost
-        FirebaseManager.uploadVaultMetadata(host.deviceId, files, summary)
+        FirebaseManager.uploadVaultMetadata(host.deviceId, allFiles, overallSummary)
+        FirebaseManager.registerOrUpdateDevice(updatedHost)
     }
 
     fun generatePairingCode(): PairingCodeData {

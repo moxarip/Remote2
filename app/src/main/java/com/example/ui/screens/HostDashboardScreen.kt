@@ -5,6 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,8 +23,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -34,6 +43,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
@@ -58,14 +68,19 @@ import androidx.compose.ui.unit.sp
 import com.example.models.BackupCommand
 import com.example.models.HostDevice
 import com.example.models.PairingCodeData
+import com.example.models.SharedFolder
+import com.example.models.VaultFile
 import com.example.models.VaultSummary
 import com.example.ui.components.BatteryBadge
 import com.example.ui.components.CommandProgressCard
+import com.example.ui.components.FileCategoryIcon
 import com.example.ui.components.PairingCodeCard
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.StorageProgressBar
+import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.ElectricBlue
 import com.example.ui.theme.EmeraldOnline
+import com.example.ui.theme.RoseError
 import com.example.ui.theme.SlateBorder
 import com.example.ui.theme.SlateCard
 import com.example.ui.theme.SlateCardElevated
@@ -82,15 +97,20 @@ fun HostDashboardScreen(
     selectedVaultPath: String,
     activePairingCode: PairingCodeData?,
     commands: List<BackupCommand>,
+    sharedFolders: List<SharedFolder> = emptyList(),
+    hostFiles: List<VaultFile> = emptyList(),
     isScanning: Boolean,
     onScanVault: () -> Unit,
     onSelectVaultPath: (String) -> Unit,
+    onAddSharedFolder: (String) -> Unit = {},
+    onRemoveSharedFolder: (String) -> Unit = {},
     onGeneratePairingCode: () -> Unit,
     onCancelCommand: (String) -> Unit,
     onNavigateSettings: () -> Unit
 ) {
     val context = LocalContext.current
     var showPairingDialog by remember { mutableStateOf(false) }
+    var folderToBrowse by remember { mutableStateOf<SharedFolder?>(null) }
 
     val dirPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -105,7 +125,7 @@ fun HostDashboardScreen(
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-            onSelectVaultPath(uri.toString())
+            onAddSharedFolder(uri.toString())
         }
     }
 
@@ -155,6 +175,18 @@ fun HostDashboardScreen(
                     }
                 }
             }
+        },
+        floatingActionButton = {
+            // Persistent '+' Button: Always stays visible so the user can keep adding folders!
+            ExtendedFloatingActionButton(
+                onClick = { dirPickerLauncher.launch(null) },
+                containerColor = ElectricBlue,
+                contentColor = SlateDark,
+                shape = RoundedCornerShape(16.dp),
+                icon = { Icon(Icons.Default.Add, contentDescription = "Add Folder") },
+                text = { Text("إضافة مجلد جديد +", fontWeight = FontWeight.Bold) },
+                modifier = Modifier.testTag("host_add_folder_fab")
+            )
         }
     ) { innerPadding ->
         LazyColumn(
@@ -193,7 +225,7 @@ fun HostDashboardScreen(
                         }
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "هذا الهاتف يعمل في وضع الهوست المنزلي الدائم. يمكنك تركه في المنزل والاتصال به من هاتف الآدمين للحصول على الملفات في أي وقت دون الحاجة للمس هذا الهاتف مجدداً.",
+                            text = "هذا الهاتف يعمل في وضع الهوست المنزلي. يمكنك إعطاء صلاحيات لأكثر من مجلد عبر علامة (+) وستبقى ظاهرة دائماً لإضافة المزيد.",
                             color = TextPrimary,
                             fontSize = 12.sp,
                             lineHeight = 17.sp
@@ -231,7 +263,7 @@ fun HostDashboardScreen(
                             }
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "لقراءة مئات الملفات ومحتويات المجلدات (مثل الصور والمستندات) دون قيود، يرجى تفعيل إذن الوصول للملفات.",
+                                text = "لقراءة الملفات ومحتويات المجلدات (مثل الصور والمستندات) دون قيود، يرجى تفعيل إذن الوصول للملفات.",
                                 color = TextPrimary,
                                 fontSize = 12.sp,
                                 lineHeight = 16.sp
@@ -263,38 +295,7 @@ fun HostDashboardScreen(
                 }
             }
 
-            // Device ID pill
-            item {
-                Surface(
-                    color = SlateCard,
-                    shape = RoundedCornerShape(10.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(
-                            text = "deviceId: ${hostDevice?.deviceId ?: "android_host"}",
-                            color = TextMuted,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace
-                        )
-                        Text(
-                            text = "ROLE: HOST",
-                            color = ElectricBlue,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            // VAULT SELECTION CARD
+            // MULTI-FOLDER SECTION (User Requirement: add folder 1, '+' stays visible, add folder 2, '+' stays visible...)
             item {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = SlateCard),
@@ -308,44 +309,54 @@ fun HostDashboardScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.CheckCircle,
-                                    contentDescription = "Selected",
-                                    tint = EmeraldOnline,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
+                            Column {
                                 Text(
-                                    text = "VAULT SELECTED ✓",
-                                    color = EmeraldOnline,
-                                    fontSize = 13.sp,
+                                    text = "المجلدات المصرح بها (${sharedFolders.size})",
+                                    color = TextPrimary,
+                                    fontSize = 15.sp,
                                     fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "المجلدات التي يمكن لهاتف الآدمن الوصول لها",
+                                    color = TextMuted,
+                                    fontSize = 11.sp
                                 )
                             }
 
-                            TextButton(
+                            // Persistent '+' button in section header
+                            Button(
                                 onClick = { dirPickerLauncher.launch(null) },
-                                modifier = Modifier.testTag("change_vault_button")
+                                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                                shape = RoundedCornerShape(10.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                modifier = Modifier.testTag("host_add_folder_header_button")
                             ) {
-                                Text(
-                                    text = "CHANGE",
-                                    color = ElectricBlue,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Icon(Icons.Default.Add, contentDescription = "Add Folder", tint = SlateDark, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("إضافة مجلد +", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
 
-                        Text(
-                            text = selectedVaultPath.ifEmpty { "/storage/emulated/0/RemoteVault/" },
-                            color = TextSecondary,
-                            fontSize = 13.sp,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 2
-                        )
+                        if (sharedFolders.isEmpty()) {
+                            Text(
+                                text = "لم يتم إضافة أي مجلدات بعد. اضغط على (+) لإضافة مجلد من الهاتف.",
+                                color = TextSecondary,
+                                fontSize = 12.sp
+                            )
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                sharedFolders.forEachIndexed { index, folder ->
+                                    SharedFolderHostItem(
+                                        index = index + 1,
+                                        folder = folder,
+                                        onBrowse = { folderToBrowse = folder },
+                                        onRemove = { onRemoveSharedFolder(folder.folderId) }
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -380,9 +391,9 @@ fun HostDashboardScreen(
                                 tint = SlateDark,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "SCAN VAULT",
+                                text = "فحص وتحديث المجلدات",
                                 color = SlateDark,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp
@@ -395,55 +406,46 @@ fun HostDashboardScreen(
                             onGeneratePairingCode()
                             showPairingDialog = true
                         },
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = ElectricBlue),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue),
                         shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(0.9f)
                             .height(48.dp)
-                            .testTag("generate_pairing_code_button")
+                            .testTag("pair_code_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.QrCode,
-                            contentDescription = "Pairing",
+                            contentDescription = "Pairing Code",
+                            tint = ElectricBlue,
                             modifier = Modifier.size(18.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "PAIR CODE",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
+                            text = "رمز الاقتران",
+                            color = TextPrimary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp
                         )
                     }
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // SCAN SUMMARY METRICS
+            // STORAGE STATS CARD
             item {
                 Card(
-                    colors = CardDefaults.cardColors(containerColor = SlateCardElevated),
+                    colors = CardDefaults.cardColors(containerColor = SlateCard),
                     shape = RoundedCornerShape(16.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "VAULT TELEMETRY",
-                            color = ElectricBlue,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
-                            letterSpacing = 1.sp
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column {
-                                Text("Files found:", color = TextSecondary, fontSize = 12.sp)
+                                Text("إجمالي الملفات", color = TextMuted, fontSize = 11.sp)
                                 Text(
                                     text = "${vaultSummary?.filesFound ?: hostDevice?.fileCount ?: 0}",
                                     color = TextPrimary,
@@ -452,7 +454,7 @@ fun HostDashboardScreen(
                                 )
                             }
                             Column {
-                                Text("Folders:", color = TextSecondary, fontSize = 12.sp)
+                                Text("المجلدات المفحوصة", color = TextMuted, fontSize = 11.sp)
                                 Text(
                                     text = "${vaultSummary?.foldersFound ?: hostDevice?.folderCount ?: 0}",
                                     color = TextPrimary,
@@ -461,97 +463,50 @@ fun HostDashboardScreen(
                                 )
                             }
                             Column {
-                                Text("Total size:", color = TextSecondary, fontSize = 12.sp)
+                                Text("الحجم الإجمالي", color = TextMuted, fontSize = 11.sp)
                                 Text(
                                     text = StorageUtils.formatFileSize(vaultSummary?.totalSizeBytes ?: hostDevice?.vaultSizeBytes ?: 0L),
-                                    color = TextPrimary,
+                                    color = ElectricBlue,
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
 
                         StorageProgressBar(
                             freeBytes = hostDevice?.storageFreeBytes ?: 18_500_000_000L,
-                            totalBytes = hostDevice?.storageTotalBytes ?: 64_000_000_000L
-                        )
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        Text(
-                            text = "Last scan: ${StorageUtils.formatDate(vaultSummary?.lastScanTime ?: hostDevice?.lastScan ?: 0L)}",
-                            color = TextMuted,
-                            fontSize = 12.sp
+                            totalBytes = hostDevice?.storageTotalBytes ?: 64_000_000_000L,
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // COMMANDS SECTION
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "REMOTE COMMANDS",
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        letterSpacing = 1.sp
-                    )
-                    Text(
-                        text = "${commands.size} total",
-                        color = TextMuted,
-                        fontSize = 12.sp
-                    )
-                }
-                Spacer(modifier = Modifier.height(10.dp))
-            }
-
-            if (commands.isEmpty()) {
+            // ACTIVE COMMANDS PROGRESS
+            val activeCmds = commands.filter { it.status == "RUNNING" || it.status == "PENDING" }
+            if (activeCmds.isNotEmpty()) {
                 item {
-                    Surface(
-                        color = SlateCard,
-                        shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Sync,
-                                contentDescription = "Idle",
-                                tint = TextMuted,
-                                modifier = Modifier.size(32.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "Listening for remote commands from Admin...",
-                                color = TextSecondary,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
+                    Text(
+                        text = "العمليات الجارية الآن",
+                        color = ElectricBlue,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
                 }
-            } else {
-                items(commands, key = { it.commandId }) { cmd ->
+                items(activeCmds, key = { it.commandId }) { cmd ->
                     CommandProgressCard(
                         command = cmd,
                         onCancel = { onCancelCommand(cmd.commandId) },
-                        modifier = Modifier.padding(bottom = 12.dp)
+                        modifier = Modifier.padding(bottom = 10.dp)
                     )
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(30.dp)) }
+            item { Spacer(modifier = Modifier.height(80.dp)) }
         }
     }
 
@@ -560,21 +515,22 @@ fun HostDashboardScreen(
         AlertDialog(
             onDismissRequest = { showPairingDialog = false },
             containerColor = SlateCard,
+            shape = RoundedCornerShape(20.dp),
             title = {
                 Text(
-                    text = "Pair with Admin",
+                    text = "رمز اقتران الآدمن",
                     color = TextPrimary,
                     fontWeight = FontWeight.Bold
                 )
             },
             text = {
-                Column {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = "Enter this 6-digit code on the Admin device to establish secure remote control.",
+                        text = "أدخل هذا الرمز المكون من 6 أرقام على هاتف الآدمن للربط الفوري:",
                         color = TextSecondary,
-                        fontSize = 13.sp
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(bottom = 12.dp)
                     )
-                    Spacer(modifier = Modifier.height(16.dp))
                     PairingCodeCard(
                         code = activePairingCode.code,
                         expiresAt = activePairingCode.expiresAt
@@ -584,11 +540,264 @@ fun HostDashboardScreen(
             confirmButton = {
                 Button(
                     onClick = { showPairingDialog = false },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                    shape = RoundedCornerShape(10.dp)
                 ) {
-                    Text("DONE", color = SlateDark, fontWeight = FontWeight.Bold)
+                    Text("تم", color = SlateDark, fontWeight = FontWeight.Bold)
                 }
             }
         )
     }
+
+    // BROWSE FOLDER HIERARCHY DIALOG FOR HOST
+    if (folderToBrowse != null) {
+        val currentFolder = folderToBrowse!!
+        val folderFiles = hostFiles.filter { it.vaultId == currentFolder.folderId }
+        HostFolderExplorerDialog(
+            folder = currentFolder,
+            files = folderFiles,
+            onDismiss = { folderToBrowse = null }
+        )
+    }
+}
+
+@Composable
+fun SharedFolderHostItem(
+    index: Int,
+    folder: SharedFolder,
+    onBrowse: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Surface(
+        color = SlateCardElevated,
+        shape = RoundedCornerShape(12.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(ElectricBlue.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = ElectricBlue,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "$index. ${folder.name}",
+                    color = TextPrimary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "${folder.fileCount} ملفات • ${StorageUtils.formatFileSize(folder.totalSizeBytes)}",
+                    color = TextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(
+                    onClick = onBrowse,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Text("استعراض", color = CyanAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Remove",
+                        tint = RoseError.copy(alpha = 0.7f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HostFolderExplorerDialog(
+    folder: SharedFolder,
+    files: List<VaultFile>,
+    onDismiss: () -> Unit
+) {
+    var currentSubPath by remember { mutableStateOf("") }
+    val (subfolders, directFiles) = remember(files, currentSubPath) {
+        StorageUtils.getItemsForPath(files, currentSubPath)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = SlateCard,
+        shape = RoundedCornerShape(18.dp),
+        title = {
+            Column {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = folder.name,
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextMuted)
+                    }
+                }
+
+                // Breadcrumb path & Back
+                if (currentSubPath.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clickable {
+                            val idx = currentSubPath.lastIndexOf('/')
+                            currentSubPath = if (idx >= 0) currentSubPath.substring(0, idx) else ""
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = ElectricBlue,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "رجوع ($currentSubPath)",
+                            color = ElectricBlue,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(350.dp)
+            ) {
+                // Subdirectories (folders)
+                if (subfolders.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = "المجلدات الفرعية (${subfolders.size})",
+                            color = TextMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+                    }
+                    items(subfolders) { sub ->
+                        Surface(
+                            color = SlateCardElevated,
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 6.dp)
+                                .clickable {
+                                    currentSubPath = sub.relativePath
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Folder, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(sub.name, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "${sub.fileCount} ملفات • ${StorageUtils.formatDate(sub.lastModified)}",
+                                        color = TextMuted,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = TextMuted, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                    }
+                }
+
+                // Direct files in this directory (sorted by lastModified descending)
+                item {
+                    Text(
+                        text = "الملفات (${directFiles.size})",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
+                    )
+                }
+
+                if (directFiles.isEmpty() && subfolders.isEmpty()) {
+                    item {
+                        Text(
+                            text = "هذا المجلد فارغ",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(vertical = 16.dp)
+                        )
+                    }
+                } else {
+                    items(directFiles) { f ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FileCategoryIcon(category = f.category, modifier = Modifier.size(28.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(f.name, color = TextPrimary, fontSize = 12.sp, maxLines = 1)
+                                Text(
+                                    "${StorageUtils.formatFileSize(f.size)} • ${StorageUtils.formatDate(f.lastModified)}",
+                                    color = TextMuted,
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Text("إغلاق", color = SlateDark, fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }

@@ -10,10 +10,13 @@ import com.example.models.CommandType
 import com.example.models.DeviceRole
 import com.example.models.HostDevice
 import com.example.models.PairingCodeData
+import com.example.models.SharedFolder
 import com.example.models.UserSession
 import com.example.models.VaultFile
 import com.example.models.VaultSummary
 import com.example.repository.BackupRepository
+import com.example.utils.StorageUtils
+import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +49,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val vaultSummary: StateFlow<VaultSummary?> = repository.vaultSummary
     val activePairingCode: StateFlow<PairingCodeData?> = repository.activePairingCode
     val selectedVaultPath: StateFlow<String> = repository.selectedVaultPath
+    val hostSharedFolders: StateFlow<List<SharedFolder>> = repository.sharedFolders
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -55,6 +59,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Admin screen state
     val pairedHosts: StateFlow<List<HostDevice>> = repository.pairedHosts
+
+    private val _adminDownloadedFiles = MutableStateFlow<List<File>>(emptyList())
+    val adminDownloadedFiles: StateFlow<List<File>> = _adminDownloadedFiles.asStateFlow()
 
     private val _selectedHost = MutableStateFlow<HostDevice?>(null)
     val selectedHost: StateFlow<HostDevice?> = _selectedHost.asStateFlow()
@@ -194,6 +201,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         scanHostVault()
     }
 
+    fun addSharedFolder(pathOrUri: String) {
+        viewModelScope.launch {
+            _isScanning.value = true
+            val added = repository.addSharedFolder(pathOrUri)
+            _isScanning.value = false
+            _snackbarMessage.value = "تمت إضافة المجلد: ${added.name}"
+        }
+    }
+
+    fun removeSharedFolder(folderId: String) {
+        viewModelScope.launch {
+            _isScanning.value = true
+            repository.removeSharedFolder(folderId)
+            _isScanning.value = false
+            _snackbarMessage.value = "تمت إزالة المجلد من قائمة المشاركة"
+        }
+    }
+
     fun generatePairingCode() {
         repository.generatePairingCode()
     }
@@ -299,5 +324,54 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearSnackbar() {
         _snackbarMessage.value = null
+    }
+
+    fun refreshDownloadedFiles() {
+        _adminDownloadedFiles.value = StorageUtils.getAdminDownloadedFiles(getApplication())
+    }
+
+    fun downloadFileToAdmin(file: VaultFile) {
+        val host = _selectedHost.value
+        val hostPath = host?.vaultPath ?: ""
+        viewModelScope.launch {
+            StorageUtils.downloadFileToAdmin(getApplication(), file, hostPath)
+            refreshDownloadedFiles()
+            _snackbarMessage.value = "تم تنزيل ${file.name} إلى هاتف الآدمن بنجاح"
+        }
+    }
+
+    fun downloadAllUploadedFilesToAdmin(files: List<VaultFile>) {
+        val host = _selectedHost.value
+        val hostPath = host?.vaultPath ?: ""
+        viewModelScope.launch {
+            var count = 0
+            for (f in files) {
+                StorageUtils.downloadFileToAdmin(getApplication(), f, hostPath)
+                count++
+            }
+            refreshDownloadedFiles()
+            _snackbarMessage.value = "تم تنزيل $count ملفات بنجاح إلى هاتف الآدمن"
+        }
+    }
+
+    fun openDownloadedFile(file: File) {
+        val success = StorageUtils.openDownloadedFile(getApplication(), file)
+        if (!success) {
+            _snackbarMessage.value = "تم حفظ الملف في التنزيلات: ${file.name}"
+        }
+    }
+
+    fun shareDownloadedFile(file: File) {
+        StorageUtils.shareDownloadedFile(getApplication(), file)
+    }
+
+    fun deleteDownloadedFile(file: File) {
+        try {
+            if (file.exists()) file.delete()
+            refreshDownloadedFiles()
+            _snackbarMessage.value = "تم حذف ${file.name} من هاتف الآدمن"
+        } catch (e: Exception) {
+            _snackbarMessage.value = "فشل الحذف: ${e.message}"
+        }
     }
 }
