@@ -24,18 +24,28 @@ class RemoteBackupFcmService : FirebaseMessagingService() {
             val fileIdsStr = data["fileIds"] ?: ""
             val fileIds = if (fileIdsStr.isNotBlank()) fileIdsStr.split(",") else emptyList()
 
-            val command = BackupCommand(
-                commandId = commandId,
-                hostId = hostId,
-                type = type,
-                fileIds = fileIds
-            )
+            val message = data["message"] ?: ""
 
-            HostBackupForegroundService.startCommand(
-                context = applicationContext,
-                command = command,
-                vaultPath = ""
-            )
+            if (type == com.example.models.CommandType.SEND_NOTIFICATION.name) {
+                com.example.utils.NotificationUtils.showAdminAlertNotification(
+                    context = applicationContext,
+                    messageText = message.ifBlank { "إشعار جديد من هاتف الآدمن" }
+                )
+            } else {
+                val command = BackupCommand(
+                    commandId = commandId,
+                    hostId = hostId,
+                    type = type,
+                    fileIds = fileIds,
+                    message = message
+                )
+
+                HostBackupForegroundService.startCommand(
+                    context = applicationContext,
+                    command = command,
+                    vaultPath = ""
+                )
+            }
         }
     }
 }

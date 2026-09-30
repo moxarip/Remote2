@@ -108,6 +108,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.AlertDialog
@@ -139,7 +140,8 @@ fun AdminHostDetailScreen(
     onRequestPreview: (VaultFile) -> Unit = {},
     onOpenFile: (File) -> Unit = {},
     onShareFile: (File) -> Unit = {},
-    onDeleteDownloadedFile: (File) -> Unit = {}
+    onDeleteDownloadedFile: (File) -> Unit = {},
+    onSendNotification: (String) -> Unit = {}
 ) {
     // Current folder hierarchy path within the selected shared folder
     var currentRelativePath by remember { mutableStateOf("") }
@@ -150,6 +152,7 @@ fun AdminHostDetailScreen(
     val context = LocalContext.current
     var activeFileForAction by remember { mutableStateOf<VaultFile?>(null) }
     var protectedFolderNotice by remember { mutableStateOf<String?>(null) }
+    var showNotificationDialog by remember { mutableStateOf(false) }
 
     // System Back Handler: navigate up subfolder first, or exit screen
     BackHandler {
@@ -288,6 +291,17 @@ fun AdminHostDetailScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         BatteryBadge(percent = host.batteryPercent)
                     }
+                }
+
+                IconButton(
+                    onClick = { showNotificationDialog = true },
+                    modifier = Modifier.testTag("admin_send_notification_topbar_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.NotificationsActive,
+                        contentDescription = "Send Notification to Host",
+                        tint = ElectricBlue
+                    )
                 }
 
                 IconButton(
@@ -517,6 +531,23 @@ fun AdminHostDetailScreen(
                             ) {
                                 Text("مزامنة", color = EmeraldOnline, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Button(
+                            onClick = { showNotificationDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = SlateCardElevated),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.5f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .testTag("admin_send_notification_action_button")
+                        ) {
+                            Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = ElectricBlue, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("إرسال إشعار فوري لشاشة الهوست (Notification)", color = ElectricBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -1140,6 +1171,117 @@ fun AdminHostDetailScreen(
                         colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
                     ) {
                         Text("حسناً", color = SlateDark, fontWeight = FontWeight.Bold)
+                    }
+                },
+                containerColor = SlateCard,
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        if (showNotificationDialog) {
+            var notifText by remember { mutableStateOf("تنبيه من الآدمن: يرجى إبقاء الهاتف متصلاً بالإنترنت") }
+            val quickSuggestions = listOf(
+                "تنبيه من الآدمن 🔔",
+                "يرجى توصيل الشاحن ⚡",
+                "جاري سحب ملفات التخزين 📁",
+                "الرجاء إبقاء الواي فاي متصلاً 📶",
+                "فحص دوري للملفات 🔍"
+            )
+
+            AlertDialog(
+                onDismissRequest = { showNotificationDialog = false },
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.NotificationsActive,
+                        contentDescription = null,
+                        tint = ElectricBlue,
+                        modifier = Modifier.size(30.dp)
+                    )
+                },
+                title = {
+                    Text(
+                        text = "إرسال إشعار إلى ${host.name}",
+                        color = TextPrimary,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp
+                    )
+                },
+                text = {
+                    Column {
+                        Text(
+                            text = "سيظهر هذا الإشعار أعلى شاشة هاتف الهوست في شريط الإشعارات (Heads-up Notification)، ويختفي تلقائياً عند الضغط عليه دون أن يفتح التطبيق.",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        OutlinedTextField(
+                            value = notifText,
+                            onValueChange = { notifText = it },
+                            label = { Text("نص الإشعار") },
+                            placeholder = { Text("اكتب رسالة التنبيه للهوست...") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("admin_notification_text_field"),
+                            maxLines = 3,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = ElectricBlue,
+                                unfocusedBorderColor = SlateBorder,
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedLabelColor = ElectricBlue,
+                                unfocusedLabelColor = TextSecondary
+                            )
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("اقتراحات سريعة:", color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(quickSuggestions) { suggestion ->
+                                val isSelected = notifText == suggestion
+                                Surface(
+                                    color = if (isSelected) ElectricBlue.copy(alpha = 0.2f) else SlateCardElevated,
+                                    shape = RoundedCornerShape(8.dp),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (isSelected) ElectricBlue else SlateBorder
+                                    ),
+                                    modifier = Modifier.clickable { notifText = suggestion }
+                                ) {
+                                    Text(
+                                        text = suggestion,
+                                        color = if (isSelected) ElectricBlue else TextSecondary,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val textToSend = notifText.trim().ifBlank { "إشعار جديد من الآدمن" }
+                            onSendNotification(textToSend)
+                            showNotificationDialog = false
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.testTag("admin_confirm_send_notification_button")
+                    ) {
+                        Text("إرسال الإشعار الآن", color = SlateDark, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showNotificationDialog = false }) {
+                        Text("إلغاء", color = TextSecondary)
                     }
                 },
                 containerColor = SlateCard,

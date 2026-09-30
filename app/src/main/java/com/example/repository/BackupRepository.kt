@@ -295,11 +295,26 @@ class BackupRepository(private val context: Context) {
                 val pendingCmd = myCommands.firstOrNull { it.status == CommandStatus.PENDING.name }
                 if (pendingCmd != null) {
                     android.util.Log.d("BackupRepository", "Host detected pending command: ${pendingCmd.commandId} (${pendingCmd.type})")
-                    HostBackupForegroundService.startCommand(
-                        context = context,
-                        command = pendingCmd,
-                        vaultPath = _selectedVaultPath.value
-                    )
+                    if (pendingCmd.type == CommandType.SEND_NOTIFICATION.name) {
+                        val msg = pendingCmd.message.ifBlank { "إشعار جديد من هاتف الآدمن" }
+                        com.example.utils.NotificationUtils.showAdminAlertNotification(
+                            context = context,
+                            messageText = msg
+                        )
+                        FirebaseManager.updateCommand(
+                            pendingCmd.copy(
+                                status = CommandStatus.COMPLETED.name,
+                                completedAt = System.currentTimeMillis(),
+                                progress = 100
+                            )
+                        )
+                    } else {
+                        HostBackupForegroundService.startCommand(
+                            context = context,
+                            command = pendingCmd,
+                            vaultPath = _selectedVaultPath.value
+                        )
+                    }
                 }
             }
         }
@@ -610,6 +625,34 @@ class BackupRepository(private val context: Context) {
                 context = context,
                 command = command,
                 vaultPath = _selectedVaultPath.value
+            )
+        }
+
+        return cmdId
+    }
+
+    fun sendNotificationCommand(hostId: String, messageText: String): String {
+        val adminId = _currentUser.value?.userId ?: "admin_user"
+        val cmdId = "cmd_notif_${System.currentTimeMillis()}_${Random.nextInt(1000, 9999)}"
+        val command = BackupCommand(
+            commandId = cmdId,
+            type = CommandType.SEND_NOTIFICATION.name,
+            status = CommandStatus.PENDING.name,
+            hostId = hostId,
+            adminId = adminId,
+            message = messageText,
+            createdAt = System.currentTimeMillis()
+        )
+        FirebaseManager.createCommand(command)
+
+        if (hostId == localDeviceId || _currentHostDevice.value?.deviceId == hostId) {
+            com.example.utils.NotificationUtils.showAdminAlertNotification(context, messageText)
+            FirebaseManager.updateCommand(
+                command.copy(
+                    status = CommandStatus.COMPLETED.name,
+                    completedAt = System.currentTimeMillis(),
+                    progress = 100
+                )
             )
         }
 

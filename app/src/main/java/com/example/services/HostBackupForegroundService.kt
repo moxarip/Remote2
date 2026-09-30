@@ -199,6 +199,20 @@ class HostBackupForegroundService : Service() {
                     FirebaseManager.updateCommand(command)
                 }
 
+                CommandType.SEND_NOTIFICATION -> {
+                    val msg = command.message.ifBlank { "إشعار وتنبيه جديد من هاتف الآدمن" }
+                    com.example.utils.NotificationUtils.showAdminAlertNotification(
+                        context = this,
+                        messageText = msg
+                    )
+                    command = command.copy(
+                        status = CommandStatus.COMPLETED.name,
+                        completedAt = System.currentTimeMillis(),
+                        progress = 100
+                    )
+                    FirebaseManager.updateCommand(command)
+                }
+
                 CommandType.BACKUP, CommandType.PREVIEW_REQUEST, CommandType.STREAM_REQUEST -> {
                     // Collect shared folders and files from repository and Firebase
                     val repo = BackupRepository.getInstance(this)

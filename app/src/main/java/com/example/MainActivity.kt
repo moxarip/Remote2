@@ -243,7 +243,8 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                         onDownloadAllUploaded = viewModel::downloadAllUploadedFilesToAdmin,
                         onOpenFile = viewModel::openDownloadedFile,
                         onShareFile = viewModel::shareDownloadedFile,
-                        onDeleteDownloadedFile = viewModel::deleteDownloadedFile
+                        onDeleteDownloadedFile = viewModel::deleteDownloadedFile,
+                        onSendNotification = viewModel::sendNotificationToHost
                     )
                 } ?: run {
                     currentScreen = AppScreen.ADMIN_DASHBOARD

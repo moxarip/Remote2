@@ -982,6 +982,7 @@ object FirebaseManager {
                     put("speedBytesPerSec", command.speedBytesPerSec)
                     put("filesProcessed", command.filesProcessed)
                     put("totalFiles", command.totalFiles)
+                    put("message", command.message)
                     val arr = JSONArray()
                     command.fileIds.forEach { arr.put(it) }
                     put("fileIds", arr)
@@ -1082,7 +1083,8 @@ object FirebaseManager {
                             speedBytesPerSec = cObj.optLong("speedBytesPerSec", 0L),
                             filesProcessed = cObj.optInt("filesProcessed", 0),
                             totalFiles = cObj.optInt("totalFiles", 0),
-                            error = if (cObj.has("error")) cObj.optString("error") else null
+                            error = if (cObj.has("error")) cObj.optString("error") else null,
+                            message = if (cObj.has("message")) cObj.optString("message") else ""
                         )
                     )
                 }

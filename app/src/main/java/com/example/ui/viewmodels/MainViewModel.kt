@@ -329,6 +329,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _snackbarMessage.value = "Command ${type.name} sent to ${host.name}"
     }
 
+    fun sendNotificationToHost(messageText: String) {
+        val host = _selectedHost.value ?: return
+        repository.sendNotificationCommand(host.deviceId, messageText)
+        _snackbarMessage.value = "تم إرسال الإشعار إلى ${host.name} بنجاح 🔔"
+    }
+
     fun cancelAdminCommand(commandId: String) {
         val host = _selectedHost.value ?: return
         repository.cancelCommand(host.deviceId, commandId)

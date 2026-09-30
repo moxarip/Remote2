@@ -13,7 +13,8 @@ enum class CommandType {
     PULL,
     CANCEL,
     PREVIEW_REQUEST,
-    STREAM_REQUEST
+    STREAM_REQUEST,
+    SEND_NOTIFICATION
 }
 
 enum class CommandStatus {
@@ -111,7 +112,8 @@ data class BackupCommand(
     val totalFiles: Int = 0,
     val bytesTransferred: Long = 0L,
     val totalBytes: Long = 0L,
-    val error: String? = null
+    val error: String? = null,
+    val message: String = ""
 )
 
 data class VaultSummary(
