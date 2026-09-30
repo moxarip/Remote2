@@ -93,6 +93,11 @@ class BackupRepository(private val context: Context) {
     private val _vaultSummary = MutableStateFlow<VaultSummary?>(null)
     val vaultSummary: StateFlow<VaultSummary?> = _vaultSummary.asStateFlow()
 
+    private val _indexingProgress = MutableStateFlow(com.example.models.IndexingProgress())
+    val indexingProgress: StateFlow<com.example.models.IndexingProgress> = _indexingProgress.asStateFlow()
+
+    private var activeScanJob: Job? = null
+
     private val _selectedVaultPath = MutableStateFlow<String>("")
     val selectedVaultPath: StateFlow<String> = _selectedVaultPath.asStateFlow()
 
@@ -430,91 +435,129 @@ class BackupRepository(private val context: Context) {
         }
     }
 
-    fun scanLocalVault() {
-        val host = _currentHostDevice.value ?: HostDevice(
-            deviceId = localDeviceId,
-            userId = _currentUser.value?.userId ?: "user_default",
-            name = localDeviceName,
-            role = DeviceRole.HOST.name,
-            status = "ONLINE"
-        ).also { _currentHostDevice.value = it }
-
-        val folders = if (_sharedFolders.value.isNotEmpty()) {
-            _sharedFolders.value
-        } else {
-            val defaultList = mutableListOf<SharedFolder>()
-            val def = StorageUtils.getDefaultVaultFolder(context)
-            defaultList.add(
-                SharedFolder(
-                    folderId = "folder_default",
-                    name = "المجلد الافتراضي (RemoteVault)",
-                    pathOrUri = def.absolutePath,
-                    addedAt = System.currentTimeMillis()
-                )
+    fun scanLocalVault(onComplete: (() -> Unit)? = null): Job {
+        activeScanJob?.cancel()
+        val job = repoScope.launch {
+            _indexingProgress.value = com.example.models.IndexingProgress(
+                isIndexing = true,
+                message = "جاري فحص عقدة التخزين..."
             )
-            if (_selectedVaultPath.value.isNotBlank()) {
+
+            val host = _currentHostDevice.value ?: HostDevice(
+                deviceId = localDeviceId,
+                userId = _currentUser.value?.userId ?: "user_default",
+                name = localDeviceName,
+                role = DeviceRole.HOST.name,
+                status = "ONLINE"
+            ).also { _currentHostDevice.value = it }
+
+            val folders = if (_sharedFolders.value.isNotEmpty()) {
+                _sharedFolders.value
+            } else {
+                val defaultList = mutableListOf<SharedFolder>()
+                val def = StorageUtils.getDefaultVaultFolder(context)
                 defaultList.add(
                     SharedFolder(
-                        folderId = "folder_custom",
-                        name = StorageUtils.getFolderDisplayName(context, _selectedVaultPath.value),
-                        pathOrUri = _selectedVaultPath.value,
+                        folderId = "folder_default",
+                        name = "المجلد الافتراضي (RemoteVault)",
+                        pathOrUri = def.absolutePath,
                         addedAt = System.currentTimeMillis()
                     )
                 )
+                if (_selectedVaultPath.value.isNotBlank()) {
+                    defaultList.add(
+                        SharedFolder(
+                            folderId = "folder_custom",
+                            name = StorageUtils.getFolderDisplayName(context, _selectedVaultPath.value),
+                            pathOrUri = _selectedVaultPath.value,
+                            addedAt = System.currentTimeMillis()
+                        )
+                    )
+                }
+                defaultList
             }
-            defaultList
-        }
 
-        val allFiles = mutableListOf<VaultFile>()
-        val updatedFolders = mutableListOf<SharedFolder>()
-        var totalFolderCount = 0
+            val allFiles = mutableListOf<VaultFile>()
+            val updatedFolders = mutableListOf<SharedFolder>()
+            var totalFolderCount = 0
 
-        for (folder in folders) {
-            val (files, summary) = StorageUtils.scanVault(context, folder.pathOrUri, host.deviceId, folder.folderId)
-            allFiles.addAll(files)
-            totalFolderCount += summary.foldersFound
-
-            val latestMod = files.maxOfOrNull { it.lastModified } ?: summary.lastScanTime
-            updatedFolders.add(
-                folder.copy(
-                    fileCount = summary.filesFound,
-                    totalSizeBytes = summary.totalSizeBytes,
-                    lastScan = summary.lastScanTime,
-                    lastModified = latestMod
+            for (folder in folders) {
+                if (!isActive) break
+                _indexingProgress.value = com.example.models.IndexingProgress(
+                    isIndexing = true,
+                    folderName = folder.name,
+                    indexedCount = allFiles.size,
+                    message = "جاري فحص ${folder.name}..."
                 )
+
+                val (files, summary) = StorageUtils.scanVault(
+                    context = context,
+                    pathOrUri = folder.pathOrUri,
+                    hostDeviceId = host.deviceId,
+                    vaultId = folder.folderId,
+                    onProgress = { count, lastFile ->
+                        _indexingProgress.value = com.example.models.IndexingProgress(
+                            isIndexing = true,
+                            folderName = folder.name,
+                            indexedCount = allFiles.size + count,
+                            message = "عثر على ${allFiles.size + count} ملف... ($lastFile)"
+                        )
+                    }
+                )
+                allFiles.addAll(files)
+                totalFolderCount += summary.foldersFound
+
+                val latestMod = files.maxOfOrNull { it.lastModified } ?: summary.lastScanTime
+                updatedFolders.add(
+                    folder.copy(
+                        fileCount = summary.filesFound,
+                        totalSizeBytes = summary.totalSizeBytes,
+                        lastScan = summary.lastScanTime,
+                        lastModified = latestMod
+                    )
+                )
+            }
+
+            saveSharedFoldersInternal(updatedFolders)
+
+            val totalSizeBytes = allFiles.sumOf { it.size }
+            val overallSummary = VaultSummary(
+                filesFound = allFiles.size,
+                foldersFound = totalFolderCount,
+                totalSizeBytes = totalSizeBytes,
+                lastScanTime = System.currentTimeMillis(),
+                vaultPath = folders.firstOrNull()?.pathOrUri ?: ""
             )
+
+            _hostFiles.value = allFiles
+            _vaultSummary.value = overallSummary
+
+            val (freeBytes, totalBytes) = StorageUtils.getStorageStats()
+            val updatedHost = host.copy(
+                fileCount = allFiles.size,
+                folderCount = totalFolderCount,
+                vaultSizeBytes = totalSizeBytes,
+                lastScan = overallSummary.lastScanTime,
+                storageFreeBytes = freeBytes,
+                storageTotalBytes = totalBytes,
+                batteryPercent = StorageUtils.getBatteryPercent(context),
+                lastSeen = System.currentTimeMillis(),
+                vaultPath = overallSummary.vaultPath,
+                sharedFolders = updatedFolders
+            )
+            _currentHostDevice.value = updatedHost
+            FirebaseManager.uploadVaultMetadata(host.deviceId, allFiles, overallSummary)
+            FirebaseManager.registerOrUpdateDevice(updatedHost)
+
+            _indexingProgress.value = com.example.models.IndexingProgress(
+                isIndexing = false,
+                indexedCount = allFiles.size,
+                message = "اكتمل الفحص: ${allFiles.size} ملف في $totalFolderCount مجلد"
+            )
+            onComplete?.invoke()
         }
-
-        saveSharedFoldersInternal(updatedFolders)
-
-        val totalSizeBytes = allFiles.sumOf { it.size }
-        val overallSummary = VaultSummary(
-            filesFound = allFiles.size,
-            foldersFound = totalFolderCount,
-            totalSizeBytes = totalSizeBytes,
-            lastScanTime = System.currentTimeMillis(),
-            vaultPath = folders.firstOrNull()?.pathOrUri ?: ""
-        )
-
-        _hostFiles.value = allFiles
-        _vaultSummary.value = overallSummary
-
-        val (freeBytes, totalBytes) = StorageUtils.getStorageStats()
-        val updatedHost = host.copy(
-            fileCount = allFiles.size,
-            folderCount = totalFolderCount,
-            vaultSizeBytes = totalSizeBytes,
-            lastScan = overallSummary.lastScanTime,
-            storageFreeBytes = freeBytes,
-            storageTotalBytes = totalBytes,
-            batteryPercent = StorageUtils.getBatteryPercent(context),
-            lastSeen = System.currentTimeMillis(),
-            vaultPath = overallSummary.vaultPath,
-            sharedFolders = updatedFolders
-        )
-        _currentHostDevice.value = updatedHost
-        FirebaseManager.uploadVaultMetadata(host.deviceId, allFiles, overallSummary)
-        FirebaseManager.registerOrUpdateDevice(updatedHost)
+        activeScanJob = job
+        return job
     }
 
     fun generatePairingCode(): PairingCodeData {

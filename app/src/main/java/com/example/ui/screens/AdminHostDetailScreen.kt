@@ -87,6 +87,7 @@ import com.example.ui.components.BatteryBadge
 import com.example.ui.components.CommandProgressCard
 import com.example.ui.components.FileCategoryIcon
 import com.example.ui.components.StatusBadge
+import com.example.ui.components.StorageProgressBar
 import com.example.ui.theme.AmberPending
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.ElectricBlue
@@ -101,6 +102,17 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.utils.StorageUtils
 import java.io.File
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.AlertDialog
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -123,6 +135,8 @@ fun AdminHostDetailScreen(
     onRefreshFiles: () -> Unit = {},
     onDownloadFile: (VaultFile) -> Unit = {},
     onDownloadAllUploaded: (List<VaultFile>) -> Unit = {},
+    onUploadSingleFile: (VaultFile) -> Unit = {},
+    onRequestPreview: (VaultFile) -> Unit = {},
     onOpenFile: (File) -> Unit = {},
     onShareFile: (File) -> Unit = {},
     onDeleteDownloadedFile: (File) -> Unit = {}
@@ -132,6 +146,10 @@ fun AdminHostDetailScreen(
     // Selected shared folder ID (null means all folders)
     var selectedSharedFolderId by remember { mutableStateOf<String?>(null) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
+
+    val context = LocalContext.current
+    var activeFileForAction by remember { mutableStateOf<VaultFile?>(null) }
+    var protectedFolderNotice by remember { mutableStateOf<String?>(null) }
 
     // System Back Handler: navigate up subfolder first, or exit screen
     BackHandler {
@@ -353,6 +371,65 @@ fun AdminHostDetailScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.PhoneAndroid,
+                                contentDescription = null,
+                                tint = ElectricBlue,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "📱 ${host.name} Storage Node",
+                                color = TextPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        val totalBytes = if (host.storageTotalBytes > 0) host.storageTotalBytes else 256L * 1024 * 1024 * 1024
+                        val freeBytes = if (host.storageFreeBytes > 0) host.storageFreeBytes else 164L * 1024 * 1024 * 1024
+                        val usedBytes = (totalBytes - freeBytes).coerceAtLeast(0L)
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Total: ${StorageUtils.formatFileSize(totalBytes)}",
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Used: ${StorageUtils.formatFileSize(usedBytes)}",
+                                color = AmberPending,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Free: ${StorageUtils.formatFileSize(freeBytes)}",
+                                color = EmeraldOnline,
+                                fontSize = 12.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        StorageProgressBar(
+                            freeBytes = freeBytes,
+                            totalBytes = totalBytes,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -739,7 +816,11 @@ fun AdminHostDetailScreen(
                             AdminSubfolderItemCard(
                                 folder = sub,
                                 onClick = {
-                                    currentRelativePath = sub.relativePath
+                                    if (sub.isProtected) {
+                                        protectedFolderNotice = sub.name
+                                    } else {
+                                        currentRelativePath = sub.relativePath
+                                    }
                                 },
                                 onSelectAllInFolder = {
                                     val filesInFolder = matchingFiles.filter { it.relativePath.startsWith("${sub.relativePath}/") || it.relativePath == sub.relativePath }
@@ -770,6 +851,7 @@ fun AdminHostDetailScreen(
                                 isSelected = isSelected,
                                 isDownloaded = isDownloaded,
                                 onToggle = { onToggleFileSelect(file.fileId) },
+                                onOpenDetails = { activeFileForAction = file },
                                 onQuickDownload = { onDownloadFile(file) },
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
@@ -793,6 +875,7 @@ fun AdminHostDetailScreen(
                                     isSelected = isSelected,
                                     isDownloaded = isDownloaded,
                                     onToggle = { onToggleFileSelect(file.fileId) },
+                                    onOpenDetails = { activeFileForAction = file },
                                     onQuickDownload = { onDownloadFile(file) },
                                     modifier = Modifier.padding(bottom = 8.dp)
                                 )
@@ -927,6 +1010,7 @@ fun AdminHostDetailScreen(
                             UploadedFileCard(
                                 file = file,
                                 isDownloaded = isDownloaded,
+                                onOpenDetails = { activeFileForAction = file },
                                 onDownload = { onDownloadFile(file) },
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
@@ -1038,6 +1122,85 @@ fun AdminHostDetailScreen(
 
             item { Spacer(modifier = Modifier.height(100.dp)) }
         }
+
+        if (protectedFolderNotice != null) {
+            AlertDialog(
+                onDismissRequest = { protectedFolderNotice = null },
+                icon = { Icon(Icons.Default.Lock, contentDescription = null, tint = RoseError) },
+                title = { Text("🔒 مجلد محمي (Protected Folder)", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = {
+                    Text(
+                        text = "المجلد '$protectedFolderNotice' محمي بواسطة قيود أمان نظام أندرويد ولا يسمح بالوصول المباشر إليه إلا إذا منحه أندرويد تصريحاً خاصاً. تم تأمين باقي المجلدات المصرح بها بنجاح.",
+                        color = TextSecondary
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = { protectedFolderNotice = null },
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue)
+                    ) {
+                        Text("حسناً", color = SlateDark, fontWeight = FontWeight.Bold)
+                    }
+                },
+                containerColor = SlateCard,
+                shape = RoundedCornerShape(16.dp)
+            )
+        }
+
+        if (activeFileForAction != null) {
+            val file = activeFileForAction!!
+            val isDownloaded = downloadedFiles.any { it.name == file.name }
+            val downloadedLocal = downloadedFiles.firstOrNull { it.name == file.name }
+
+            FileActionDialog(
+                file = file,
+                isDownloaded = isDownloaded,
+                downloadedFile = downloadedLocal,
+                onDismiss = { activeFileForAction = null },
+                onPreviewOpen = {
+                    activeFileForAction = null
+                    if (isDownloaded && downloadedLocal != null) {
+                        onOpenFile(downloadedLocal)
+                    } else if (file.downloadUrl.isNotBlank()) {
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(Uri.parse(file.downloadUrl), file.mimeType)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        try {
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            try {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(file.downloadUrl)).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                })
+                            } catch (ex: Exception) {}
+                        }
+                    } else {
+                        onRequestPreview(file)
+                    }
+                },
+                onDownload = {
+                    activeFileForAction = null
+                    onDownloadFile(file)
+                },
+                onUpload = {
+                    activeFileForAction = null
+                    onUploadSingleFile(file)
+                },
+                onShare = if (isDownloaded && downloadedLocal != null) {
+                    {
+                        activeFileForAction = null
+                        onShareFile(downloadedLocal)
+                    }
+                } else null,
+                onDeleteDownloaded = if (isDownloaded && downloadedLocal != null) {
+                    {
+                        activeFileForAction = null
+                        onDeleteDownloadedFile(downloadedLocal)
+                    }
+                } else null
+            )
+        }
     }
 }
 
@@ -1048,13 +1211,18 @@ fun AdminSubfolderItemCard(
     onSelectAllInFolder: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isProtected = folder.isProtected
     Surface(
-        color = SlateCardElevated,
+        color = if (isProtected) SlateCard else SlateCardElevated,
         shape = RoundedCornerShape(12.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (isProtected) RoseError.copy(alpha = 0.45f) else SlateBorder
+        ),
         modifier = modifier
             .fillMaxWidth()
             .clickable { onClick() }
+            .testTag("subfolder_${folder.relativePath.replace('/', '_')}")
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -1064,13 +1232,13 @@ fun AdminSubfolderItemCard(
                 modifier = Modifier
                     .size(38.dp)
                     .clip(RoundedCornerShape(10.dp))
-                    .background(AmberPending.copy(alpha = 0.15f)),
+                    .background(if (isProtected) RoseError.copy(alpha = 0.15f) else AmberPending.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.Folder,
-                    contentDescription = "Folder",
-                    tint = AmberPending,
+                    imageVector = if (isProtected) Icons.Default.Lock else Icons.Default.Folder,
+                    contentDescription = if (isProtected) "Protected Folder" else "Folder",
+                    tint = if (isProtected) RoseError else AmberPending,
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -1078,34 +1246,60 @@ fun AdminSubfolderItemCard(
             Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "${folder.name}/",
-                    color = TextPrimary,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${folder.name}/",
+                        color = if (isProtected) RoseError else TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
+                    )
+                    if (isProtected) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            color = RoseError.copy(alpha = 0.18f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = "🔒 Protected",
+                                color = RoseError,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${folder.fileCount} ملفات • ${StorageUtils.formatFileSize(folder.totalSizeBytes)} • ${StorageUtils.formatDate(folder.lastModified)}",
+                    text = if (isProtected) "🔒 محمي بنظام أندرويد (غير متاح للتصفح المباشر)" else "${folder.fileCount} ملفات • ${StorageUtils.formatFileSize(folder.totalSizeBytes)} • ${StorageUtils.formatDate(folder.lastModified)}",
                     color = TextMuted,
                     fontSize = 11.sp
                 )
             }
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(
-                    onClick = onSelectAllInFolder,
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp)
-                ) {
-                    Text("تحديد الكل", color = ElectricBlue, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
+            if (!isProtected) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(
+                        onClick = onSelectAllInFolder,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text("تحديد الكل", color = ElectricBlue, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
 
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Open Folder",
+                        tint = TextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            } else {
                 Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Open Folder",
-                    tint = TextMuted,
-                    modifier = Modifier.size(16.dp)
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = "Protected",
+                    tint = RoseError.copy(alpha = 0.7f),
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
@@ -1118,6 +1312,7 @@ fun VaultFileRowItem(
     isSelected: Boolean,
     isDownloaded: Boolean = false,
     onToggle: () -> Unit,
+    onOpenDetails: () -> Unit = {},
     onQuickDownload: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -1130,7 +1325,7 @@ fun VaultFileRowItem(
         ),
         modifier = modifier
             .fillMaxWidth()
-            .clickable { onToggle() }
+            .clickable { onOpenDetails() }
             .testTag("file_row_${file.fileId}")
     ) {
         Row(
@@ -1187,6 +1382,20 @@ fun VaultFileRowItem(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.width(6.dp))
+
+            IconButton(
+                onClick = onOpenDetails,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "Options",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }
@@ -1195,6 +1404,7 @@ fun VaultFileRowItem(
 fun UploadedFileCard(
     file: VaultFile,
     isDownloaded: Boolean,
+    onOpenDetails: () -> Unit = {},
     onDownload: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1202,7 +1412,9 @@ fun UploadedFileCard(
         color = SlateCardElevated,
         shape = RoundedCornerShape(12.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldOnline.copy(alpha = 0.3f)),
-        modifier = modifier.fillMaxWidth()
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onOpenDetails() }
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -1383,4 +1595,292 @@ fun DownloadedFileRow(
             }
         }
     }
+}
+
+@Composable
+fun FileActionDialog(
+    file: VaultFile,
+    isDownloaded: Boolean,
+    downloadedFile: File?,
+    onDismiss: () -> Unit,
+    onPreviewOpen: () -> Unit,
+    onDownload: () -> Unit,
+    onUpload: () -> Unit,
+    onShare: (() -> Unit)?,
+    onDeleteDownloaded: (() -> Unit)?
+) {
+    val isImage = file.mimeType.startsWith("image/") || file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".jpeg", ignoreCase = true) || file.name.endsWith(".png", ignoreCase = true) || file.name.endsWith(".webp", ignoreCase = true)
+    val isVideo = file.mimeType.startsWith("video/") || file.name.endsWith(".mp4", ignoreCase = true) || file.name.endsWith(".mkv", ignoreCase = true)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                FileCategoryIcon(category = file.category)
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = file.name,
+                        color = TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2
+                    )
+                    Text(
+                        text = "${StorageUtils.formatFileSize(file.size)} • ${file.mimeType}",
+                        color = TextMuted,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // STATUS BADGES
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (file.isBackedUp || file.downloadUrl.isNotBlank()) {
+                        Surface(
+                            color = EmeraldOnline.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldOnline.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = "في السحابة ✓",
+                                color = EmeraldOnline,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    } else {
+                        Surface(
+                            color = AmberPending.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, AmberPending.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = "مخزن على الهوست (غير مرفوع)",
+                                color = AmberPending,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    if (isDownloaded) {
+                        Surface(
+                            color = CyanAccent.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, CyanAccent.copy(alpha = 0.4f))
+                        ) {
+                            Text(
+                                text = "محمل على هاتفك ⬇",
+                                color = CyanAccent,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // PREVIEW BOX
+                if (isImage) {
+                    val imageSource: Any? = when {
+                        isDownloaded && downloadedFile != null && downloadedFile.exists() -> downloadedFile
+                        file.downloadUrl.isNotBlank() -> file.downloadUrl
+                        else -> null
+                    }
+                    if (imageSource != null) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(SlateCardElevated),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            AsyncImage(
+                                model = imageSource,
+                                contentDescription = file.name,
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    } else {
+                        Surface(
+                            color = SlateCardElevated,
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "صورة مخزنة في عقدة التخزين",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "اضغط على 'طلب معاينة' لسحبها من الهوست وعرضها هنا فوراً",
+                                    color = TextMuted,
+                                    fontSize = 11.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                } else if (isVideo) {
+                    Surface(
+                        color = SlateCardElevated,
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = ElectricBlue, modifier = Modifier.size(32.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text("ملف فيديو (Streaming Available)", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                Text(
+                                    text = if (file.downloadUrl.isNotBlank() || isDownloaded) "يمكنك تشغيله وبثه مباشرة" else "يتطلب سحبه من الهوست للبث",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // FILE METADATA DETAILS
+                Surface(
+                    color = SlateCardElevated.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = "المسار: ${file.relativePath}",
+                            color = TextMuted,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 2
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "تاريخ التعديل: ${StorageUtils.formatDate(file.lastModified)}",
+                            color = TextMuted,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // ACTION BUTTONS
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Open / Preview Button
+                    Button(
+                        onClick = onPreviewOpen,
+                        colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Icon(Icons.Default.Visibility, contentDescription = null, tint = SlateDark, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isDownloaded) "فتح الملف المحمل" else if (file.downloadUrl.isNotBlank()) "معاينة / بث مباشر" else "طلب معاينة من الهوست",
+                            color = SlateDark,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    // Download Button
+                    Button(
+                        onClick = onDownload,
+                        colors = ButtonDefaults.buttonColors(containerColor = SlateCardElevated),
+                        shape = RoundedCornerShape(10.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyanAccent.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Icon(Icons.Default.FileDownload, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (isDownloaded) "إعادة التنزيل إلى هاتفك" else if (file.isBackedUp) "تنزيل إلى هاتفك (آدمن)" else "طلب وسحب الملف لتنزيله",
+                            color = CyanAccent,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                    }
+
+                    // Upload to Cloud Button (if not already uploaded)
+                    if (!file.isBackedUp && file.downloadUrl.isBlank()) {
+                        Button(
+                            onClick = onUpload,
+                            colors = ButtonDefaults.buttonColors(containerColor = SlateCardElevated),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldOnline.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth().height(42.dp)
+                        ) {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, tint = EmeraldOnline, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("رفع هذا الملف فقط إلى السحابة", color = EmeraldOnline, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+
+                    // Share and Delete if downloaded on admin
+                    if (isDownloaded && onShare != null) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = onShare,
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("مشاركة", color = TextPrimary, fontSize = 11.sp)
+                            }
+
+                            if (onDeleteDownloaded != null) {
+                                OutlinedButton(
+                                    onClick = onDeleteDownloaded,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, RoseError.copy(alpha = 0.4f)),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = null, tint = RoseError, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("حذف من الآدمن", color = RoseError, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("إغلاق", color = TextSecondary, fontWeight = FontWeight.Medium)
+            }
+        },
+        containerColor = SlateCard,
+        shape = RoundedCornerShape(16.dp)
+    )
 }

@@ -11,7 +11,9 @@ enum class CommandType {
     REFRESH,
     BACKUP,
     PULL,
-    CANCEL
+    CANCEL,
+    PREVIEW_REQUEST,
+    STREAM_REQUEST
 }
 
 enum class CommandStatus {
@@ -55,7 +57,9 @@ data class HostDevice(
     val folderCount: Int = 0,
     val vaultSizeBytes: Long = 0L,
     val lastScan: Long = 0L,
-    val sharedFolders: List<SharedFolder> = emptyList()
+    val sharedFolders: List<SharedFolder> = emptyList(),
+    val localMediaUrl: String = "",
+    val mediaAuthToken: String = ""
 )
 
 data class VaultFile(
@@ -124,4 +128,12 @@ data class UserSession(
     val displayName: String = "",
     val role: DeviceRole = DeviceRole.UNSET,
     val selectedRole: DeviceRole = DeviceRole.UNSET
+)
+
+data class IndexingProgress(
+    val isIndexing: Boolean = false,
+    val folderName: String = "",
+    val indexedCount: Int = 0,
+    val totalEstimated: Int = 0,
+    val message: String = ""
 )

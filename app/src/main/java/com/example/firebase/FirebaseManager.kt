@@ -293,6 +293,8 @@ object FirebaseManager {
                     put("folderCount", device.folderCount)
                     put("vaultSizeBytes", device.vaultSizeBytes)
                     put("vaultPath", device.vaultPath)
+                    put("localMediaUrl", device.localMediaUrl)
+                    put("mediaAuthToken", device.mediaAuthToken)
                     put("lastScan", device.lastScan)
                     put("lastSeen", System.currentTimeMillis())
 
@@ -397,7 +399,9 @@ object FirebaseManager {
                     fileCount = devObj.optInt("fileCount", 0),
                     folderCount = devObj.optInt("folderCount", 0),
                     vaultSizeBytes = devObj.optLong("vaultSizeBytes", 0L),
-                    lastScan = devObj.optLong("lastScan", 0L)
+                    lastScan = devObj.optLong("lastScan", 0L),
+                    localMediaUrl = devObj.optString("localMediaUrl", ""),
+                    mediaAuthToken = devObj.optString("mediaAuthToken", "")
                 )
 
                 val parsedFolders = mutableListOf<com.example.models.SharedFolder>()

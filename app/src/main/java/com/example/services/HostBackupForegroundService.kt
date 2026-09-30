@@ -199,7 +199,7 @@ class HostBackupForegroundService : Service() {
                     FirebaseManager.updateCommand(command)
                 }
 
-                CommandType.BACKUP -> {
+                CommandType.BACKUP, CommandType.PREVIEW_REQUEST, CommandType.STREAM_REQUEST -> {
                     // Collect shared folders and files from repository and Firebase
                     val repo = BackupRepository.getInstance(this)
                     val host = repo.currentHostDevice.value ?: FirebaseManager.syncedDevices.value[hostId]
@@ -386,6 +386,10 @@ class HostBackupForegroundService : Service() {
                         completedAt = System.currentTimeMillis()
                     )
                     FirebaseManager.updateCommand(command)
+                }
+
+                else -> {
+                    android.util.Log.w("HostBackupService", "Unhandled command type: $typeStr")
                 }
             }
         } catch (e: Exception) {

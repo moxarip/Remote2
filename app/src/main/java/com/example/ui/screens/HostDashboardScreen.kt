@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudUpload
@@ -103,6 +104,7 @@ fun HostDashboardScreen(
     sharedFolders: List<SharedFolder> = emptyList(),
     hostFiles: List<VaultFile> = emptyList(),
     isScanning: Boolean,
+    indexingProgress: com.example.models.IndexingProgress = com.example.models.IndexingProgress(),
     onScanVault: () -> Unit,
     onSelectVaultPath: (String) -> Unit,
     onAddSharedFolder: (String) -> Unit = {},
@@ -118,6 +120,23 @@ fun HostDashboardScreen(
 
     val dirPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            onAddSharedFolder(uri.toString())
+        }
+    }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
             try {
@@ -199,6 +218,48 @@ fun HostDashboardScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 20.dp)
         ) {
+            // LIVE INDEXING PROGRESS BANNER (NON-BLOCKING)
+            if (indexingProgress.isIndexing) {
+                item {
+                    Surface(
+                        color = ElectricBlue.copy(alpha = 0.15f),
+                        shape = RoundedCornerShape(14.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 14.dp)
+                            .testTag("storage_node_indexing_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(
+                                color = ElectricBlue,
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.5.dp
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Indexing Storage Node...",
+                                    color = ElectricBlue,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (indexingProgress.message.isNotBlank()) indexingProgress.message else "Found ${indexingProgress.indexedCount} files...",
+                                    color = TextPrimary,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // UNATTENDED HOME HOST BANNER
             item {
                 Surface(
@@ -274,23 +335,43 @@ fun HostDashboardScreen(
                             lineHeight = 17.sp
                         )
                         Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = { dirPickerLauncher.launch(null) },
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
-                            shape = RoundedCornerShape(10.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(44.dp)
-                                .testTag("enable_storage_node_button")
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, tint = SlateDark, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (sharedFolders.isEmpty()) "Enable Storage Node (تفعيل عقدة التخزين)" else "إضافة مسار إضافي لعقدة التخزين (+)",
-                                color = SlateDark,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp
-                            )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { dirPickerLauncher.launch(null) },
+                                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .testTag("enable_storage_node_button")
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, tint = SlateDark, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (sharedFolders.isEmpty()) "Enable Storage Node" else "إضافة مجلد (+)",
+                                    color = SlateDark,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .height(44.dp)
+                                    .testTag("host_add_single_file_button")
+                            ) {
+                                Icon(Icons.Default.AttachFile, contentDescription = null, tint = ElectricBlue, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "ملف منفرد",
+                                    color = ElectricBlue,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
                     }
                 }

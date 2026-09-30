@@ -35,7 +35,7 @@ data class AuthUiState(
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
-    val repository = BackupRepository(application)
+    val repository = BackupRepository.getInstance(application)
 
     // Auth
     private val _authUiState = MutableStateFlow(AuthUiState())
@@ -50,6 +50,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val activePairingCode: StateFlow<PairingCodeData?> = repository.activePairingCode
     val selectedVaultPath: StateFlow<String> = repository.selectedVaultPath
     val hostSharedFolders: StateFlow<List<SharedFolder>> = repository.sharedFolders
+    val indexingProgress: StateFlow<com.example.models.IndexingProgress> = repository.indexingProgress
 
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
@@ -347,6 +348,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val hostId = host?.deviceId ?: file.hostDeviceId
         val hostPath = host?.vaultPath ?: ""
         viewModelScope.launch {
+            if (!file.isBackedUp && file.downloadUrl.isBlank()) {
+                _snackbarMessage.value = "طلب الملف ${file.name} من عقدة التخزين..."
+                repository.sendCommand(hostId, CommandType.BACKUP, listOf(file.fileId))
+                return@launch
+            }
             _snackbarMessage.value = "جاري تنزيل ${file.name} من Firebase..."
             val result = FirebaseManager.downloadFileFromCloud(getApplication(), hostId, file)
             result.fold(
@@ -368,6 +374,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _snackbarMessage.value = "فشل تنزيل ${file.name} من السحابة: ${err.message}"
                 }
             )
+        }
+    }
+
+    fun requestFileUpload(file: VaultFile) {
+        val host = _selectedHost.value
+        val hostId = host?.deviceId ?: file.hostDeviceId
+        viewModelScope.launch {
+            _snackbarMessage.value = "جاري إرسال أمر رفع ${file.name} إلى عقدة التخزين..."
+            repository.sendCommand(hostId, CommandType.BACKUP, listOf(file.fileId))
+        }
+    }
+
+    fun requestFilePreview(file: VaultFile) {
+        val host = _selectedHost.value
+        val hostId = host?.deviceId ?: file.hostDeviceId
+        viewModelScope.launch {
+            if (file.isBackedUp || file.downloadUrl.isNotBlank()) {
+                _snackbarMessage.value = "الملف متاح للمعاينة المباشرة"
+            } else {
+                _snackbarMessage.value = "طلب تجهيز معاينة ${file.name} من عقدة التخزين..."
+                repository.sendCommand(hostId, CommandType.PREVIEW_REQUEST, listOf(file.fileId))
+            }
         }
     }
 
