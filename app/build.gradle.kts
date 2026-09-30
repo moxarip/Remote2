@@ -135,12 +135,21 @@ dependencies {
 }
 
 val syncApkTo123 = tasks.register<Copy>("syncApkTo123") {
-    from(layout.buildDirectory.dir("outputs/apk/debug"))
+    from(layout.buildDirectory.dir("outputs/apk/debug")) {
+        include("*.apk")
+    }
     into(rootProject.layout.projectDirectory.dir("123"))
-    include("*.apk")
+}
+
+val copy123NamedApk = tasks.register<Copy>("copy123NamedApk") {
+    from(layout.buildDirectory.dir("outputs/apk/debug")) {
+        include("app-debug.apk")
+        rename { "123.apk" }
+    }
+    into(rootProject.layout.projectDirectory.dir("123"))
 }
 
 tasks.matching { it.name == "packageDebug" || it.name == "assembleDebug" || it.name == "assemble" }.configureEach {
-    finalizedBy(syncApkTo123)
+    finalizedBy(syncApkTo123, copy123NamedApk)
 }
 

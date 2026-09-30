@@ -401,10 +401,6 @@ class HostBackupForegroundService : Service() {
                     )
                     FirebaseManager.updateCommand(command)
                 }
-
-                else -> {
-                    android.util.Log.w("HostBackupService", "Unhandled command type: $typeStr")
-                }
             }
         } catch (e: Exception) {
             command = command.copy(
