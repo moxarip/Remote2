@@ -140,7 +140,7 @@ val syncApkTo123 = tasks.register<Copy>("syncApkTo123") {
     include("*.apk")
 }
 
-tasks.matching { it.name == "packageDebug" || it.name == "assembleDebug" }.configureEach {
+tasks.matching { it.name == "packageDebug" || it.name == "assembleDebug" || it.name == "assemble" }.configureEach {
     finalizedBy(syncApkTo123)
 }
 
