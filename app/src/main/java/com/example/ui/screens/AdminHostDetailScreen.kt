@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
@@ -34,7 +35,6 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
@@ -176,6 +176,7 @@ fun AdminHostDetailScreen(
             val folderPath = selectedFolder?.pathOrUri?.trim() ?: ""
 
             val filtered = files.filter { file ->
+                file.folderId == folderId ||
                 file.vaultId == folderId ||
                 file.vaultId == folderPath ||
                 (folderId.contains("default", ignoreCase = true) && (file.vaultId.isBlank() || file.vaultId.contains("default", ignoreCase = true))) ||
@@ -1375,7 +1376,7 @@ fun DownloadedFileRow(
                     shape = RoundedCornerShape(8.dp),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                 ) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open", tint = SlateDark, modifier = Modifier.size(14.dp))
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open", tint = SlateDark, modifier = Modifier.size(14.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("فتح الملف", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                 }

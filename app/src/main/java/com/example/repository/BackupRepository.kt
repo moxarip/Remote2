@@ -201,6 +201,10 @@ class BackupRepository(private val context: Context) {
             addedAt = System.currentTimeMillis()
         )
         val currentList = _sharedFolders.value.toMutableList()
+        // If current list only contains the placeholder default vault, replace it with the first user-authorized SAF directory
+        if (currentList.size == 1 && currentList[0].folderId == "folder_default") {
+            currentList.clear()
+        }
         currentList.add(newFolder)
         saveSharedFoldersInternal(currentList)
         scanLocalVault()
@@ -210,17 +214,6 @@ class BackupRepository(private val context: Context) {
     fun removeSharedFolder(folderId: String) {
         val currentList = _sharedFolders.value.toMutableList()
         currentList.removeAll { it.folderId == folderId }
-        if (currentList.isEmpty()) {
-            val defaultDir = StorageUtils.getDefaultVaultFolder(context)
-            currentList.add(
-                SharedFolder(
-                    folderId = "folder_default",
-                    name = "المجلد الافتراضي (RemoteVault)",
-                    pathOrUri = defaultDir.absolutePath,
-                    addedAt = System.currentTimeMillis()
-                )
-            )
-        }
         saveSharedFoldersInternal(currentList)
         scanLocalVault()
     }
@@ -605,5 +598,31 @@ class BackupRepository(private val context: Context) {
         ) { map, id ->
             map[id] ?: emptyList()
         }.stateIn(repoScope, SharingStarted.Lazily, emptyList())
+    }
+
+    fun updateHostFileStatus(
+        backedUpIds: List<String>,
+        remoteStorageMap: Map<String, String> = emptyMap(),
+        downloadUrlMap: Map<String, String> = emptyMap()
+    ) {
+        val current = _hostFiles.value
+        val idSet = backedUpIds.toSet()
+        val updated = current.map { f ->
+            if (f.fileId in idSet) {
+                f.copy(
+                    isBackedUp = true,
+                    remoteStoragePath = remoteStorageMap[f.fileId] ?: f.remoteStoragePath,
+                    downloadUrl = downloadUrlMap[f.fileId] ?: f.downloadUrl
+                )
+            } else {
+                f
+            }
+        }
+        _hostFiles.value = updated
+    }
+
+    fun uploadFiles(fileIds: List<String>) {
+        val host = _currentHostDevice.value ?: return
+        sendCommand(host.deviceId, CommandType.BACKUP, fileIds)
     }
 }

@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.AddModerator
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
@@ -323,7 +324,7 @@ fun SettingsScreen(
                     .height(48.dp)
                     .testTag("logout_button")
             ) {
-                Icon(Icons.Default.Logout, contentDescription = null, tint = RoseError, modifier = Modifier.size(18.dp))
+                Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, tint = RoseError, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("LOGOUT", color = RoseError, fontWeight = FontWeight.Bold, fontSize = 13.sp)
             }

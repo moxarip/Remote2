@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
+import android.util.Log
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
@@ -172,34 +173,53 @@ object StorageUtils {
         var totalSize = 0L
 
         fun scanRecursive(dir: File, relativeParent: String) {
-            val files = dir.listFiles() ?: return
-            for (file in files) {
-                if (file.isDirectory) {
-                    folderCount++
-                    val nextParent = if (relativeParent.isEmpty()) file.name else "$relativeParent/${file.name}"
-                    scanRecursive(file, nextParent)
-                } else {
-                    val relPath = if (relativeParent.isEmpty()) file.name else "$relativeParent/${file.name}"
-                    val mime = getMimeTypeFromExtension(file.name)
-                    val cat = getCategoryForFile(file.name, mime)
-                    val fileSize = file.length()
-                    totalSize += fileSize
+            val files = try {
+                dir.listFiles()
+            } catch (e: SecurityException) {
+                Log.w("StorageUtils", "Directory protected by Android security: ${dir.absolutePath} - ${e.message}")
+                null
+            } catch (e: Exception) {
+                Log.w("StorageUtils", "Error accessing directory: ${dir.absolutePath} - ${e.message}")
+                null
+            } ?: return
 
-                    fileList.add(
-                        VaultFile(
-                            fileId = "file_${UUID.nameUUIDFromBytes(relPath.toByteArray())}",
-                            name = file.name,
-                            relativePath = relPath,
-                            size = fileSize,
-                            mimeType = mime,
-                            lastModified = file.lastModified(),
-                            createdAt = System.currentTimeMillis(),
-                            hostDeviceId = hostDeviceId,
-                            vaultId = vaultId,
-                            category = cat,
-                            isBackedUp = false
+            for (file in files) {
+                try {
+                    if (file.isDirectory) {
+                        folderCount++
+                        val nextParent = if (relativeParent.isEmpty()) file.name else "$relativeParent/${file.name}"
+                        scanRecursive(file, nextParent)
+                    } else {
+                        val relPath = if (relativeParent.isEmpty()) file.name else "$relativeParent/${file.name}"
+                        val mime = getMimeTypeFromExtension(file.name)
+                        val cat = getCategoryForFile(file.name, mime)
+                        val fileSize = file.length()
+                        totalSize += fileSize
+                        val parentFolderId = if (relativeParent.isEmpty()) vaultId else "${vaultId}_${relativeParent.replace('/', '_')}"
+
+                        fileList.add(
+                            VaultFile(
+                                fileId = "file_${UUID.nameUUIDFromBytes("${vaultId}_$relPath".toByteArray())}",
+                                name = file.name,
+                                displayName = file.name,
+                                relativePath = relPath,
+                                size = fileSize,
+                                mimeType = mime,
+                                lastModified = file.lastModified(),
+                                createdAt = System.currentTimeMillis(),
+                                deviceId = hostDeviceId,
+                                hostDeviceId = hostDeviceId,
+                                folderId = vaultId,
+                                parentFolderId = parentFolderId,
+                                vaultId = vaultId,
+                                category = cat,
+                                isBackedUp = false,
+                                uriString = Uri.fromFile(file).toString()
+                            )
                         )
-                    )
+                    }
+                } catch (e: Exception) {
+                    Log.w("StorageUtils", "Error indexing item in ${dir.name}: ${e.message}")
                 }
             }
         }
@@ -218,42 +238,72 @@ object StorageUtils {
     }
 
     fun scanDocumentTree(context: Context, treeUri: Uri, hostDeviceId: String, vaultId: String): Pair<List<VaultFile>, VaultSummary> {
-        val rootDoc = DocumentFile.fromTreeUri(context, treeUri) ?: return Pair(emptyList(), VaultSummary())
+        val rootDoc = try {
+            DocumentFile.fromTreeUri(context, treeUri)
+        } catch (e: Exception) {
+            Log.e("StorageUtils", "Cannot resolve treeUri $treeUri: ${e.message}")
+            null
+        } ?: return Pair(emptyList(), VaultSummary())
+
         val fileList = mutableListOf<VaultFile>()
         var folderCount = 0
         var totalSize = 0L
 
         fun scanDocRecursive(dir: DocumentFile, relativeParent: String) {
-            val children = dir.listFiles()
-            for (item in children) {
-                if (item.isDirectory) {
-                    folderCount++
-                    val dirName = item.name ?: "folder"
-                    val nextParent = if (relativeParent.isEmpty()) dirName else "$relativeParent/$dirName"
-                    scanDocRecursive(item, nextParent)
-                } else {
-                    val name = item.name ?: "unnamed_file"
-                    val relPath = if (relativeParent.isEmpty()) name else "$relativeParent/$name"
-                    val mime = item.type ?: getMimeTypeFromExtension(name)
-                    val cat = getCategoryForFile(name, mime)
-                    val size = item.length()
-                    totalSize += size
+            val children = try {
+                dir.listFiles()
+            } catch (e: SecurityException) {
+                Log.w("StorageUtils", "Directory protected by Android security (access restricted): ${dir.name} - ${e.message}")
+                emptyArray()
+            } catch (e: Exception) {
+                Log.w("StorageUtils", "Error listing directory ${dir.name}: ${e.message}")
+                emptyArray()
+            }
 
-                    fileList.add(
-                        VaultFile(
-                            fileId = "file_${UUID.nameUUIDFromBytes(relPath.toByteArray())}",
-                            name = name,
-                            relativePath = relPath,
-                            size = size,
-                            mimeType = mime,
-                            lastModified = item.lastModified(),
-                            createdAt = System.currentTimeMillis(),
-                            hostDeviceId = hostDeviceId,
-                            vaultId = vaultId,
-                            category = cat,
-                            isBackedUp = false
+            for (item in children) {
+                try {
+                    if (item.isDirectory) {
+                        folderCount++
+                        val dirName = item.name ?: "folder"
+                        val nextParent = if (relativeParent.isEmpty()) dirName else "$relativeParent/$dirName"
+                        // Android security check: if it cannot be read (like Android/data or Android/obb), handle gracefully
+                        if (item.canRead()) {
+                            scanDocRecursive(item, nextParent)
+                        } else {
+                            Log.w("StorageUtils", "Directory is protected/inaccessible: $nextParent")
+                        }
+                    } else {
+                        val name = item.name ?: "unnamed_file"
+                        val relPath = if (relativeParent.isEmpty()) name else "$relativeParent/$name"
+                        val mime = item.type ?: getMimeTypeFromExtension(name)
+                        val cat = getCategoryForFile(name, mime)
+                        val size = item.length()
+                        totalSize += size
+                        val parentFolderId = if (relativeParent.isEmpty()) vaultId else "${vaultId}_${relativeParent.replace('/', '_')}"
+
+                        fileList.add(
+                            VaultFile(
+                                fileId = "file_${UUID.nameUUIDFromBytes("${vaultId}_$relPath".toByteArray())}",
+                                name = name,
+                                displayName = name,
+                                relativePath = relPath,
+                                size = size,
+                                mimeType = mime,
+                                lastModified = item.lastModified(),
+                                createdAt = System.currentTimeMillis(),
+                                deviceId = hostDeviceId,
+                                hostDeviceId = hostDeviceId,
+                                folderId = vaultId,
+                                parentFolderId = parentFolderId,
+                                vaultId = vaultId,
+                                category = cat,
+                                isBackedUp = false,
+                                uriString = item.uri.toString()
+                            )
                         )
-                    )
+                    }
+                } catch (e: Exception) {
+                    Log.w("StorageUtils", "Error indexing document file: ${e.message}")
                 }
             }
         }
@@ -302,7 +352,13 @@ object StorageUtils {
 
         if (clean.startsWith("content://")) {
             val uri = Uri.parse(clean)
-            // 1. Try real filesystem path resolution first for direct file access
+            // 1. Scan via SAF DocumentFile first (returns real content:// SAF URIs for every file)
+            val docResult = scanDocumentTree(context, uri, hostDeviceId, vaultId)
+            if (docResult.first.isNotEmpty()) {
+                return docResult
+            }
+
+            // 2. If SAF returned 0 (e.g. test environment or local path translation), try real filesystem path
             val realPath = resolvePathFromTreeUri(uri)
             if (realPath != null) {
                 val realDir = File(realPath)
@@ -314,13 +370,6 @@ object StorageUtils {
                 }
             }
 
-            // 2. Scan via SAF DocumentFile
-            val docResult = scanDocumentTree(context, uri, hostDeviceId, vaultId)
-            if (docResult.first.isNotEmpty()) {
-                return docResult
-            }
-
-            // 3. If SAF returned 0, try realDir if exists even if canRead was false
             if (realPath != null) {
                 val realDir = File(realPath)
                 if (realDir.exists()) {
@@ -463,13 +512,35 @@ object StorageUtils {
         if (clean.startsWith("content://")) {
             try {
                 val uri = Uri.parse(clean)
-                val doc = DocumentFile.fromTreeUri(context, uri)
-                val docName = doc?.name
-                if (!docName.isNullOrBlank()) return docName
+                val uriStr = Uri.decode(clean)
+                if (uriStr.contains("primary:Android/media", ignoreCase = true) ||
+                    uriStr.contains("primary%3AAndroid%2Fmedia", ignoreCase = true) ||
+                    uriStr.endsWith("Android/media", ignoreCase = true) ||
+                    uriStr.contains("/Android/media", ignoreCase = true)
+                ) {
+                    return "Android/media"
+                }
+                if (uriStr.endsWith("primary:") || uriStr.endsWith("primary%3A") || uriStr.endsWith("/root")) {
+                    return "Storage Node (الذاكرة الرئيسية)"
+                }
                 val real = resolvePathFromTreeUri(uri)
                 if (real != null) {
+                    val extDir = Environment.getExternalStorageDirectory().absolutePath
+                    val relFromExt = real.substringAfter(extDir).trimStart('/')
+                    if (relFromExt.isNotBlank()) {
+                        return relFromExt
+                    }
                     val f = File(real)
                     if (f.name.isNotBlank()) return f.name
+                }
+                val doc = try { DocumentFile.fromTreeUri(context, uri) } catch (e: Exception) { null }
+                val docName = doc?.name
+                if (!docName.isNullOrBlank()) {
+                    if (docName.startsWith("primary:")) {
+                        val sub = docName.substringAfter("primary:").trim()
+                        return if (sub.isNotBlank()) sub else "Storage Node (الذاكرة الرئيسية)"
+                    }
+                    return docName
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -546,6 +617,35 @@ object StorageUtils {
         file: VaultFile,
         sharedFolders: List<com.example.models.SharedFolder>
     ): Pair<java.io.InputStream?, Long> {
+        // 1. Direct SAF content:// or file:// URI stored in VaultFile
+        if (file.uriString.isNotBlank()) {
+            try {
+                val uri = Uri.parse(file.uriString)
+                if (uri.scheme == "content") {
+                    val stream = context.contentResolver.openInputStream(uri)
+                    if (stream != null) {
+                        val statSize = try {
+                            context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: file.size
+                        } catch (e: Exception) {
+                            file.size
+                        }
+                        val finalSize = if (statSize > 0) statSize else file.size
+                        Log.i("StorageUtils", "Opened stream from SAF URI '${file.uriString}' (size=$finalSize bytes)")
+                        return Pair(stream, finalSize)
+                    }
+                } else if (uri.scheme == "file") {
+                    val diskFile = File(uri.path ?: "")
+                    if (diskFile.exists() && diskFile.canRead()) {
+                        Log.i("StorageUtils", "Opened stream from file URI '${file.uriString}' (size=${diskFile.length()} bytes)")
+                        return Pair(java.io.FileInputStream(diskFile), diskFile.length())
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("StorageUtils", "Could not open stream directly from uriString '${file.uriString}': ${e.message}")
+            }
+        }
+
+        // 2. Resolve via candidate shared folders (matching file.vaultId first)
         val sf = sharedFolders.firstOrNull { it.folderId == file.vaultId }
         val candidateFolders = if (sf != null) {
             listOf(sf) + sharedFolders.filter { it.folderId != file.vaultId }
@@ -556,63 +656,68 @@ object StorageUtils {
         for (folder in candidateFolders) {
             val path = folder.pathOrUri.trim()
             if (path.startsWith("content://")) {
-                val uri = Uri.parse(path)
-                val realPath = resolvePathFromTreeUri(uri)
+                val treeUri = Uri.parse(path)
+                val realPath = resolvePathFromTreeUri(treeUri)
                 if (realPath != null) {
                     val diskFile = File(realPath, file.relativePath)
                     if (diskFile.exists() && diskFile.canRead()) {
                         try {
+                            Log.i("StorageUtils", "Opened stream from resolved tree path '${diskFile.absolutePath}'")
                             return Pair(java.io.FileInputStream(diskFile), diskFile.length())
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.w("StorageUtils", "Error opening resolved diskFile: ${e.message}")
                         }
                     }
                 }
 
                 try {
-                    val rootDoc = DocumentFile.fromTreeUri(context, uri)
+                    val rootDoc = DocumentFile.fromTreeUri(context, treeUri)
                     if (rootDoc != null) {
                         var curr: DocumentFile? = rootDoc
-                        val segments = file.relativePath.split('/')
+                        val segments = file.relativePath.replace('\\', '/').split('/')
                         for (seg in segments) {
+                            if (seg.isBlank()) continue
                             curr = curr?.findFile(seg)
                             if (curr == null) break
                         }
                         if (curr != null && curr.isFile) {
                             val stream = context.contentResolver.openInputStream(curr.uri)
                             if (stream != null) {
+                                Log.i("StorageUtils", "Opened stream from traversed DocumentFile '${curr.uri}'")
                                 return Pair(stream, curr.length())
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    Log.w("StorageUtils", "DocumentFile tree search failed: ${e.message}")
                 }
             } else if (path.isNotBlank()) {
                 val diskFile = File(path, file.relativePath)
                 if (diskFile.exists() && diskFile.canRead()) {
                     try {
+                        Log.i("StorageUtils", "Opened stream from shared folder '${diskFile.absolutePath}'")
                         return Pair(java.io.FileInputStream(diskFile), diskFile.length())
                     } catch (e: Exception) {
-                        e.printStackTrace()
+                        Log.w("StorageUtils", "Error opening diskFile: ${e.message}")
                     }
                 }
             }
         }
 
+        // 3. Fallback to default vault folder on disk
         try {
             val defFolder = getDefaultVaultFolder(context)
             val defFile = File(defFolder, file.relativePath)
             if (defFile.exists() && defFile.canRead()) {
+                Log.i("StorageUtils", "Opened stream from default vault '${defFile.absolutePath}'")
                 return Pair(java.io.FileInputStream(defFile), defFile.length())
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.w("StorageUtils", "Error opening default vault file: ${e.message}")
         }
 
-        val fallbackText = "Remote Backup Vault\nFile: ${file.name}\nSize: ${file.size} bytes\nHost: ${file.hostDeviceId}\nDate: ${java.util.Date()}\n"
-        val fallbackBytes = fallbackText.toByteArray()
-        return Pair(java.io.ByteArrayInputStream(fallbackBytes), fallbackBytes.size.toLong())
+        Log.e("StorageUtils", "Could not locate readable file content for ${file.name} (uri=${file.uriString}, relPath=${file.relativePath})")
+        return Pair(null, 0L)
     }
 }
 

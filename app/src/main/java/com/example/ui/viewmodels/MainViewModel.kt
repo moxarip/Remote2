@@ -238,6 +238,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun uploadFiles(files: List<VaultFile>) {
+        if (files.isEmpty()) return
+        val host = currentHostDevice.value ?: return
+        val fileIds = files.map { it.fileId }
+        repository.uploadFiles(fileIds)
+        _snackbarMessage.value = "بدء رفع ${files.size} ملفات إلى السحابة..."
+    }
+
+    fun uploadFile(file: VaultFile) {
+        uploadFiles(listOf(file))
+    }
+
     fun clearSelectedHost() {
         _selectedHost.value = null
         _adminSelectedFileIds.value = emptySet()
@@ -340,13 +352,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             result.fold(
                 onSuccess = { downloadedFile ->
                     refreshDownloadedFiles()
-                    _snackbarMessage.value = "تم تنزيل ${downloadedFile.name} بنجاح من السحابة إلى التنزيلات"
+                    _snackbarMessage.value = "تم تنزيل ${downloadedFile.name} بنجاح من السحابة (${StorageUtils.formatFileSize(downloadedFile.length())})"
                 },
-                onFailure = {
-                    // Fallback to local resolver if needed
-                    StorageUtils.downloadFileToAdmin(getApplication(), file, hostPath)
-                    refreshDownloadedFiles()
-                    _snackbarMessage.value = "تم تنزيل ${file.name} إلى هاتف الآدمن بنجاح"
+                onFailure = { err ->
+                    // Check if file is physically available on local disk before falling back
+                    if (hostPath.isNotBlank()) {
+                        val localCandidate = File(hostPath, file.relativePath)
+                        if (localCandidate.exists() && localCandidate.canRead()) {
+                            StorageUtils.downloadFileToAdmin(getApplication(), file, hostPath)
+                            refreshDownloadedFiles()
+                            _snackbarMessage.value = "تم نسخ ${file.name} من القرص المحلي بنجاح"
+                            return@launch
+                        }
+                    }
+                    _snackbarMessage.value = "فشل تنزيل ${file.name} من السحابة: ${err.message}"
                 }
             )
         }

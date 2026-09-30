@@ -139,20 +139,47 @@ class HostBackupForegroundService : Service() {
         try {
             when (CommandType.valueOf(typeStr)) {
                 CommandType.SCAN -> {
-                    startForegroundNotification("Scanning vault files...", -1)
-                    val (files, summary) = StorageUtils.scanFolder(vaultFolder, hostId, "vault_default")
-                    delay(800) // smooth scan simulation
+                    startForegroundNotification("Scanning storage node directories...", -1)
+                    val repo = BackupRepository.getInstance(this)
+                    val host = repo.currentHostDevice.value ?: FirebaseManager.syncedDevices.value[hostId]
+                    val sharedFolders = host?.sharedFolders?.ifEmpty { repo.sharedFolders.value } ?: repo.sharedFolders.value
 
-                    FirebaseManager.uploadVaultMetadata(hostId, files, summary)
+                    val allFiles = mutableListOf<VaultFile>()
+                    var totalFolders = 0
+                    var totalBytes = 0L
+
+                    if (sharedFolders.isNotEmpty()) {
+                        for (folder in sharedFolders) {
+                            val (scanned, summary) = StorageUtils.scanVault(this, folder.pathOrUri, hostId, folder.folderId)
+                            allFiles.addAll(scanned)
+                            totalFolders += summary.foldersFound
+                            totalBytes += summary.totalSizeBytes
+                        }
+                    } else {
+                        val (scanned, summary) = StorageUtils.scanVault(this, vaultPath, hostId, "vault_default")
+                        allFiles.addAll(scanned)
+                        totalFolders += summary.foldersFound
+                        totalBytes += summary.totalSizeBytes
+                    }
+
+                    val overallSummary = com.example.models.VaultSummary(
+                        filesFound = allFiles.size,
+                        foldersFound = totalFolders,
+                        totalSizeBytes = totalBytes,
+                        lastScanTime = System.currentTimeMillis(),
+                        vaultPath = sharedFolders.firstOrNull()?.pathOrUri ?: vaultPath
+                    )
+
+                    FirebaseManager.uploadVaultMetadata(hostId, allFiles, overallSummary)
 
                     command = command.copy(
                         status = CommandStatus.COMPLETED.name,
                         completedAt = System.currentTimeMillis(),
                         progress = 100,
-                        totalFiles = files.size,
-                        filesProcessed = files.size,
-                        totalBytes = summary.totalSizeBytes,
-                        bytesTransferred = summary.totalSizeBytes
+                        totalFiles = allFiles.size,
+                        filesProcessed = allFiles.size,
+                        totalBytes = overallSummary.totalSizeBytes,
+                        bytesTransferred = overallSummary.totalSizeBytes
                     )
                     FirebaseManager.updateCommand(command)
                 }
@@ -223,19 +250,32 @@ class HostBackupForegroundService : Service() {
                     updateNotification("بدء الرفع: 0%", 0)
 
                     val backedUpIds = mutableListOf<String>()
+                    val remoteStorageMap = mutableMapOf<String, String>()
+                    val downloadUrlMap = mutableMapOf<String, String>()
 
                     for ((index, file) in filesToBackup.withIndex()) {
                         if (!currentCoroutineContext().isActive) break
 
                         // Open actual file input stream from disk/SAF
                         val (inputStream, streamSize) = StorageUtils.openInputStreamForVaultFile(this, file, sharedFolders)
-                        val actualFileSize = if (streamSize > 0) streamSize else file.size.coerceAtLeast(1024L)
+                        val actualFileSize = if (streamSize > 0) streamSize else file.size
+                        val uriToLog = file.uriString.ifBlank { "resolved_via_shared_folder" }
+                        val mimeToLog = file.mimeType.ifBlank { StorageUtils.getMimeTypeFromExtension(file.name) }
+                        val destToLog = "${FirebaseManager.DEFAULT_DATABASE_URL}/backups/$hostId/${file.fileId}"
+
+                        android.util.Log.i("HostBackupService", "--------------------------------------------------")
+                        android.util.Log.i("HostBackupService", "UPLOAD START for file: ${file.name}")
+                        android.util.Log.i("HostBackupService", "  URI: $uriToLog")
+                        android.util.Log.i("HostBackupService", "  Filename: ${file.name}")
+                        android.util.Log.i("HostBackupService", "  MIME type: $mimeToLog")
+                        android.util.Log.i("HostBackupService", "  File size: $actualFileSize bytes (${StorageUtils.formatFileSize(actualFileSize)})")
+                        android.util.Log.i("HostBackupService", "  Upload destination: $destToLog")
 
                         if (inputStream != null) {
                             try {
                                 val uploadResult = FirebaseManager.uploadFileToCloud(
                                     hostId = hostId,
-                                    file = file,
+                                    file = file.copy(size = actualFileSize, mimeType = mimeToLog, uriString = file.uriString),
                                     inputStream = inputStream,
                                     totalBytes = actualFileSize,
                                     onProgress = { filePercent, bytesSent, speed ->
@@ -257,22 +297,25 @@ class HostBackupForegroundService : Service() {
                                 )
 
                                 uploadResult.fold(
-                                    onSuccess = {
+                                    onSuccess = { remotePath ->
+                                        android.util.Log.i("HostBackupService", "UPLOAD SUCCESS for file: ${file.name}")
+                                        android.util.Log.i("HostBackupService", "  Remote path: $remotePath")
                                         transferredBytes += actualFileSize
                                         backedUpIds.add(file.fileId)
+                                        remoteStorageMap[file.fileId] = remotePath
+                                        downloadUrlMap[file.fileId] = "${FirebaseManager.DEFAULT_DATABASE_URL}/$remotePath.json"
                                     },
                                     onFailure = { err ->
-                                        android.util.Log.e("HostBackupService", "Upload failed for ${file.name}: ${err.message}")
-                                        transferredBytes += actualFileSize
-                                        backedUpIds.add(file.fileId)
+                                        android.util.Log.e("HostBackupService", "UPLOAD FAILURE for file: ${file.name}: ${err.message}", err)
                                     }
                                 )
+                            } catch (e: Exception) {
+                                android.util.Log.e("HostBackupService", "UPLOAD EXCEPTION for file: ${file.name}: ${e.message}", e)
                             } finally {
                                 try { inputStream.close() } catch (e: Exception) {}
                             }
                         } else {
-                            transferredBytes += actualFileSize
-                            backedUpIds.add(file.fileId)
+                            android.util.Log.e("HostBackupService", "UPLOAD FAILURE: Cannot open input stream for file ${file.name} (URI: $uriToLog)")
                         }
 
                         // Broadcast progress after each file
@@ -286,7 +329,8 @@ class HostBackupForegroundService : Service() {
                             totalBytes = totalBytes
                         )
                         FirebaseManager.updateCommand(command)
-                        FirebaseManager.markFilesAsBackedUp(hostId, backedUpIds)
+                        FirebaseManager.markFilesAsBackedUp(hostId, backedUpIds, remoteStorageMap, downloadUrlMap)
+                        repo.updateHostFileStatus(backedUpIds, remoteStorageMap, downloadUrlMap)
                         updateNotification("${index + 1}/$totalFiles: ${file.name} (100%)", overallProgress)
                     }
 

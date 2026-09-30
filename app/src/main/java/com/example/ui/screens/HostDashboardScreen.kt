@@ -28,6 +28,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Folder
@@ -42,6 +43,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
@@ -106,7 +109,8 @@ fun HostDashboardScreen(
     onRemoveSharedFolder: (String) -> Unit = {},
     onGeneratePairingCode: () -> Unit,
     onCancelCommand: (String) -> Unit,
-    onNavigateSettings: () -> Unit
+    onNavigateSettings: () -> Unit,
+    onUploadFiles: (List<VaultFile>) -> Unit = {}
 ) {
     val context = LocalContext.current
     var showPairingDialog by remember { mutableStateOf(false) }
@@ -234,62 +238,59 @@ fun HostDashboardScreen(
                 }
             }
 
-            // Storage Permission Alert if needed
-            if (!StorageUtils.hasStoragePermission(context)) {
-                item {
-                    Surface(
-                        color = ElectricBlue.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(14.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.4f)),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(bottom = 14.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(14.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.Folder,
-                                    contentDescription = null,
-                                    tint = ElectricBlue,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "إذن قراءة جميع الملفات والمجلدات",
-                                    color = ElectricBlue,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = "لقراءة الملفات ومحتويات المجلدات (مثل الصور والمستندات) دون قيود، يرجى تفعيل إذن الوصول للملفات.",
-                                color = TextPrimary,
-                                fontSize = 12.sp,
-                                lineHeight = 16.sp
+            // STORAGE NODE SETUP CARD
+            item {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = SlateCardElevated),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 14.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Storage,
+                                contentDescription = null,
+                                tint = ElectricBlue,
+                                modifier = Modifier.size(20.dp)
                             )
-                            Spacer(modifier = Modifier.height(10.dp))
-                            Button(
-                                onClick = {
-                                    try {
-                                        context.startActivity(StorageUtils.getAllFilesAccessIntent(context))
-                                    } catch (e: Exception) {
-                                        e.printStackTrace()
-                                    }
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
-                                shape = RoundedCornerShape(8.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(40.dp)
-                            ) {
-                                Text(
-                                    text = "تفعيل الإذن بالكامل (All Files Access)",
-                                    color = SlateDark,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp
-                                )
-                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "PERSONAL STORAGE NODE",
+                                color = ElectricBlue,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 1.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "تحويل الهاتف القديم إلى عقدة تخزين شخصية. امنح الوصول للمجلدات المطلوبة عبر SAF مرة واحدة (مثل DCIM، Download، WhatsApp، أو Android/media) لتمكين هاتف الآدمن من تصفحها وطلب الملفات عند الحاجة دون رفع تلقائي.",
+                            color = TextPrimary,
+                            fontSize = 12.sp,
+                            lineHeight = 17.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { dirPickerLauncher.launch(null) },
+                            colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                                .testTag("enable_storage_node_button")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, tint = SlateDark, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (sharedFolders.isEmpty()) "Enable Storage Node (تفعيل عقدة التخزين)" else "إضافة مسار إضافي لعقدة التخزين (+)",
+                                color = SlateDark,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
                         }
                     }
                 }
@@ -340,11 +341,28 @@ fun HostDashboardScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         if (sharedFolders.isEmpty()) {
-                            Text(
-                                text = "لم يتم إضافة أي مجلدات بعد. اضغط على (+) لإضافة مجلد من الهاتف.",
-                                color = TextSecondary,
-                                fontSize = 12.sp
-                            )
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "لم يتم إضافة أي مجلدات بعد إلى عقدة التخزين.",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = { dirPickerLauncher.launch(null) },
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue),
+                                    shape = RoundedCornerShape(8.dp)
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null, tint = ElectricBlue, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Enable Storage Node (اختر مجلد)", color = ElectricBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         } else {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 sharedFolders.forEachIndexed { index, folder ->
@@ -586,7 +604,8 @@ fun HostDashboardScreen(
         HostFolderExplorerDialog(
             folder = currentFolder,
             files = folderFiles,
-            onDismiss = { folderToBrowse = null }
+            onDismiss = { folderToBrowse = null },
+            onUploadFiles = onUploadFiles
         )
     }
 }
@@ -669,9 +688,11 @@ fun SharedFolderHostItem(
 fun HostFolderExplorerDialog(
     folder: SharedFolder,
     files: List<VaultFile>,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onUploadFiles: (List<VaultFile>) -> Unit = {}
 ) {
     var currentSubPath by remember { mutableStateOf("") }
+    var selectedFileIds by remember { mutableStateOf(setOf<String>()) }
     val (subfolders, directFiles) = remember(files, currentSubPath) {
         StorageUtils.getItemsForPath(files, currentSubPath)
     }
@@ -805,7 +826,20 @@ fun HostFolderExplorerDialog(
                                 .padding(vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            FileCategoryIcon(category = f.category, modifier = Modifier.size(28.dp))
+                            Checkbox(
+                                checked = selectedFileIds.contains(f.fileId),
+                                onCheckedChange = { isChecked ->
+                                    selectedFileIds = if (isChecked) {
+                                        selectedFileIds + f.fileId
+                                    } else {
+                                        selectedFileIds - f.fileId
+                                    }
+                                },
+                                colors = CheckboxDefaults.colors(checkedColor = ElectricBlue),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            FileCategoryIcon(category = f.category, modifier = Modifier.size(26.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(f.name, color = TextPrimary, fontSize = 12.sp, maxLines = 1)
@@ -815,18 +849,77 @@ fun HostFolderExplorerDialog(
                                     fontSize = 10.sp
                                 )
                             }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            if (f.isBackedUp) {
+                                Surface(
+                                    color = EmeraldOnline.copy(alpha = 0.15f),
+                                    shape = RoundedCornerShape(6.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = EmeraldOnline,
+                                            modifier = Modifier.size(10.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("مرفوع", color = EmeraldOnline, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Button(
+                                onClick = { onUploadFiles(listOf(f)) },
+                                colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .height(28.dp)
+                                    .testTag("upload_file_${f.fileId}")
+                            ) {
+                                Icon(Icons.Default.CloudUpload, contentDescription = "Upload", tint = SlateDark, modifier = Modifier.size(12.dp))
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(if (f.isBackedUp) "إعادة رفع" else "رفع", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                            }
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = onDismiss,
-                colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Text("إغلاق", color = SlateDark, fontWeight = FontWeight.Bold)
+            if (selectedFileIds.isNotEmpty()) {
+                Button(
+                    onClick = {
+                        val toUpload = directFiles.filter { it.fileId in selectedFileIds }
+                        onUploadFiles(toUpload)
+                        selectedFileIds = emptySet()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("host_upload_selected_button")
+                ) {
+                    Icon(Icons.Default.CloudUpload, contentDescription = null, tint = SlateDark, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("رفع المحدد (${selectedFileIds.size})", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            } else {
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(containerColor = ElectricBlue),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("إغلاق", color = SlateDark, fontWeight = FontWeight.Bold)
+                }
+            }
+        },
+        dismissButton = {
+            if (selectedFileIds.isNotEmpty()) {
+                TextButton(onClick = { selectedFileIds = emptySet() }) {
+                    Text("إلغاء التحديد", color = TextSecondary)
+                }
             }
         }
     )

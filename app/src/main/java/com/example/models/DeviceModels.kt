@@ -30,7 +30,11 @@ data class SharedFolder(
     val fileCount: Int = 0,
     val totalSizeBytes: Long = 0L,
     val lastScan: Long = 0L,
-    val lastModified: Long = 0L
+    val lastModified: Long = 0L,
+    val parentFolderId: String = "",
+    val relativePath: String = "",
+    val isProtected: Boolean = false,
+    val subfolders: List<String> = emptyList()
 )
 
 data class HostDevice(
@@ -57,15 +61,22 @@ data class HostDevice(
 data class VaultFile(
     val fileId: String = "",
     val name: String = "",
+    val displayName: String = "",
     val relativePath: String = "",
     val size: Long = 0L,
     val mimeType: String = "*/*",
     val lastModified: Long = 0L,
     val createdAt: Long = System.currentTimeMillis(),
+    val deviceId: String = "",
     val hostDeviceId: String = "",
+    val folderId: String = "",
+    val parentFolderId: String = "",
     val vaultId: String = "",
     val category: String = "Other",
-    val isBackedUp: Boolean = false
+    val isBackedUp: Boolean = false,
+    val uriString: String = "",
+    val remoteStoragePath: String = "",
+    val downloadUrl: String = ""
 )
 
 data class PairingCodeData(

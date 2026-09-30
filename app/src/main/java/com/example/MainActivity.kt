@@ -176,7 +176,8 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                     onRemoveSharedFolder = viewModel::removeSharedFolder,
                     onGeneratePairingCode = viewModel::generatePairingCode,
                     onCancelCommand = { cmdId -> viewModel.repository.cancelCommand(viewModel.repository.localDeviceId, cmdId) },
-                    onNavigateSettings = { currentScreen = AppScreen.SETTINGS }
+                    onNavigateSettings = { currentScreen = AppScreen.SETTINGS },
+                    onUploadFiles = viewModel::uploadFiles
                 )
             }
 

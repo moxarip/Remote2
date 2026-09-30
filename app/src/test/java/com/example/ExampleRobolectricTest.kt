@@ -115,4 +115,120 @@ class ExampleRobolectricTest {
     assertEquals(1, photoDirectFiles.size)
     assertEquals("photo1.jpg", photoDirectFiles[0].name)
   }
+
+  @Test
+  fun `test openInputStreamForVaultFile reads real file bytes`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+    val tempFile = java.io.File(context.cacheDir, "sample_test_upload.txt")
+    val expectedContent = "ACTUAL_FILE_CONTENT_BYTES_12345_XYZ"
+    tempFile.writeText(expectedContent)
+
+    val vaultFile = com.example.models.VaultFile(
+        fileId = "test_physical_f1",
+        name = "sample_test_upload.txt",
+        relativePath = "sample_test_upload.txt",
+        size = tempFile.length(),
+        mimeType = "text/plain",
+        uriString = android.net.Uri.fromFile(tempFile).toString()
+    )
+
+    val (stream, size) = StorageUtils.openInputStreamForVaultFile(context, vaultFile, emptyList())
+    org.junit.Assert.assertNotNull(stream)
+    val readContent = stream!!.bufferedReader().readText()
+    assertEquals(expectedContent, readContent)
+    assertEquals(tempFile.length(), size)
+    stream.close()
+  }
+
+  @Test
+  fun `test upload and download file bytes to cloud`() {
+    kotlinx.coroutines.runBlocking {
+      val context = ApplicationProvider.getApplicationContext<Context>()
+      val originalContent = "ACTUAL_UPLOAD_CONTENT_TEST_BYTES_FOR_FIREBASE"
+      val testInputStream = java.io.ByteArrayInputStream(originalContent.toByteArray(Charsets.UTF_8))
+      val testHostId = "test_host_unit_test_${System.currentTimeMillis()}"
+
+      val vaultFile = com.example.models.VaultFile(
+          fileId = "unit_test_file_${System.currentTimeMillis()}",
+          name = "uploaded_document.txt",
+          relativePath = "uploaded_document.txt",
+          size = originalContent.length.toLong(),
+          mimeType = "text/plain",
+          category = "Documents",
+          hostDeviceId = testHostId
+      )
+
+      // 1. Upload actual bytes to cloud storage
+      val uploadResult = com.example.firebase.FirebaseManager.uploadFileToCloud(
+          hostId = testHostId,
+          file = vaultFile,
+          inputStream = testInputStream,
+          totalBytes = originalContent.length.toLong(),
+          onProgress = { _, _, _ -> }
+      )
+      assertTrue("Upload must succeed", uploadResult.isSuccess)
+      val remotePath = uploadResult.getOrThrow()
+      assertTrue("Remote path must not be blank", remotePath.isNotBlank())
+
+      // 2. Download actual file bytes from cloud storage as Admin
+      val uploadedFileWithMeta = vaultFile.copy(
+          isBackedUp = true,
+          remoteStoragePath = remotePath
+      )
+      val downloadResult = com.example.firebase.FirebaseManager.downloadFileFromCloud(
+          context = context,
+          hostId = testHostId,
+          file = uploadedFileWithMeta
+      )
+      assertTrue("Download must succeed: ${downloadResult.exceptionOrNull()?.message}", downloadResult.isSuccess)
+      val downloadedPhysicalFile = downloadResult.getOrThrow()
+      assertTrue(downloadedPhysicalFile.exists())
+
+      // 3. Verify physical content matches original bytes exactly
+      val downloadedText = downloadedPhysicalFile.readText()
+      assertEquals("Downloaded physical content must match uploaded bytes exactly", originalContent, downloadedText)
+
+      // Clean up
+      downloadedPhysicalFile.delete()
+    }
+  }
+
+  @Test
+  fun `test storage node directory indexing and Android media naming`() {
+    val context = ApplicationProvider.getApplicationContext<Context>()
+
+    // Test folder display name parsing
+    val mediaUriStr = "content://com.android.externalstorage.documents/tree/primary%3AAndroid%2Fmedia"
+    val mediaName = StorageUtils.getFolderDisplayName(context, mediaUriStr)
+    assertEquals("Android/media", mediaName)
+
+    val dcimUriStr = "content://com.android.externalstorage.documents/tree/primary%3ADCIM"
+    val dcimName = StorageUtils.getFolderDisplayName(context, dcimUriStr)
+    assertEquals("DCIM", dcimName)
+
+    // Test directory structure scanning with file model verification
+    val baseDir = java.io.File(context.cacheDir, "StorageNodeTest").apply { mkdirs() }
+    val dcimDir = java.io.File(baseDir, "DCIM").apply { mkdirs() }
+    val cameraDir = java.io.File(dcimDir, "Camera").apply { mkdirs() }
+    java.io.File(cameraDir, "photo1.jpg").apply { writeText("photo_data") }
+
+    val mediaDir = java.io.File(baseDir, "Android/media").apply { mkdirs() }
+    java.io.File(mediaDir, "audio.opus").apply { writeText("audio_data") }
+
+    val (files, summary) = StorageUtils.scanFolder(baseDir, "test_device_1", "node_folder_1")
+    assertTrue(files.isNotEmpty())
+    assertTrue(summary.foldersFound >= 3)
+
+    val photoFile = files.firstOrNull { it.name == "photo1.jpg" }
+    org.junit.Assert.assertNotNull(photoFile)
+    assertEquals("photo1.jpg", photoFile!!.displayName)
+    assertEquals("test_device_1", photoFile.deviceId)
+    assertEquals("node_folder_1", photoFile.folderId)
+    assertTrue("Parent folder ID should reflect hierarchy", photoFile.parentFolderId.contains("DCIM") || photoFile.parentFolderId.contains("Camera"))
+
+    val audioFile = files.firstOrNull { it.name == "audio.opus" }
+    org.junit.Assert.assertNotNull(audioFile)
+    assertEquals("Android/media/audio.opus", audioFile!!.relativePath)
+    assertEquals("node_folder_1", audioFile.folderId)
+  }
 }
