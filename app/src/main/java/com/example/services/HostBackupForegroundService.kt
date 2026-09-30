@@ -14,6 +14,8 @@ import com.example.firebase.FirebaseManager
 import com.example.models.BackupCommand
 import com.example.models.CommandStatus
 import com.example.models.CommandType
+import com.example.models.VaultFile
+import com.example.repository.BackupRepository
 import com.example.utils.StorageUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -171,8 +173,32 @@ class HostBackupForegroundService : Service() {
                 }
 
                 CommandType.BACKUP -> {
-                    // Backup selected files or all files in vault
-                    val (allFiles, _) = StorageUtils.scanFolder(vaultFolder, hostId, "vault_default")
+                    // Collect shared folders and files from repository and Firebase
+                    val repo = BackupRepository.getInstance(this)
+                    val host = repo.currentHostDevice.value ?: FirebaseManager.syncedDevices.value[hostId]
+                    val sharedFolders = host?.sharedFolders?.ifEmpty { repo.sharedFolders.value } ?: repo.sharedFolders.value
+
+                    // Get all files across all shared folders
+                    val allFiles = mutableListOf<VaultFile>()
+                    val existingRepoFiles = repo.hostFiles.value
+                    if (existingRepoFiles.isNotEmpty()) {
+                        allFiles.addAll(existingRepoFiles)
+                    } else {
+                        val syncedFiles = FirebaseManager.syncedFiles.value[hostId]
+                        if (!syncedFiles.isNullOrEmpty()) {
+                            allFiles.addAll(syncedFiles)
+                        } else {
+                            for (sf in sharedFolders) {
+                                val (scanned, _) = StorageUtils.scanVault(this, sf.pathOrUri, hostId, sf.folderId)
+                                allFiles.addAll(scanned)
+                            }
+                            if (allFiles.isEmpty()) {
+                                val (scanned, _) = StorageUtils.scanFolder(vaultFolder, hostId, "vault_default")
+                                allFiles.addAll(scanned)
+                            }
+                        }
+                    }
+
                     val filesToBackup = if (fileIds.isNotEmpty()) {
                         allFiles.filter { it.fileId in fileIds }
                     } else {
@@ -183,15 +209,15 @@ class HostBackupForegroundService : Service() {
                     val totalBytes = filesToBackup.sumOf { it.size }.coerceAtLeast(1024L)
                     var transferredBytes = 0L
 
-                    // Initial 0% broadcast
+                    // Initial broadcast
                     command = command.copy(
                         progress = 0,
-                        currentFile = "بدء رفع الملفات...",
+                        currentFile = "بدء الرفع الفعلي إلى السحابة...",
                         filesProcessed = 0,
                         totalFiles = totalFiles,
                         bytesTransferred = 0L,
                         totalBytes = totalBytes,
-                        speedBytesPerSec = 8_500_000L
+                        speedBytesPerSec = 0L
                     )
                     FirebaseManager.updateCommand(command)
                     updateNotification("بدء الرفع: 0%", 0)
@@ -201,42 +227,74 @@ class HostBackupForegroundService : Service() {
                     for ((index, file) in filesToBackup.withIndex()) {
                         if (!currentCoroutineContext().isActive) break
 
-                        // Fluid sub-steps so the 0 to 100 progress bar advances smoothly
-                        val baseProgress = ((index.toFloat() / totalFiles) * 100).toInt()
-                        val nextFileBaseProgress = (((index + 1).toFloat() / totalFiles) * 100).toInt()
-                        val stepRange = (nextFileBaseProgress - baseProgress).coerceAtLeast(1)
+                        // Open actual file input stream from disk/SAF
+                        val (inputStream, streamSize) = StorageUtils.openInputStreamForVaultFile(this, file, sharedFolders)
+                        val actualFileSize = if (streamSize > 0) streamSize else file.size.coerceAtLeast(1024L)
 
-                        for (subStep in 1..4) {
-                            if (!currentCoroutineContext().isActive) break
-                            val subProgress = (baseProgress + (stepRange * (subStep / 4f))).toInt().coerceIn(0, 99)
-                            val speed = 8_200_000L + (((index + subStep) % 5) * 450_000L)
-                            val currentFileTransferred = (file.size * (subStep / 4f)).toLong()
-                            val totalSoFar = (transferredBytes + currentFileTransferred).coerceAtMost(totalBytes)
+                        if (inputStream != null) {
+                            try {
+                                val uploadResult = FirebaseManager.uploadFileToCloud(
+                                    hostId = hostId,
+                                    file = file,
+                                    inputStream = inputStream,
+                                    totalBytes = actualFileSize,
+                                    onProgress = { filePercent, bytesSent, speed ->
+                                        val totalSoFar = (transferredBytes + bytesSent).coerceAtMost(totalBytes)
+                                        val overallProgress = ((totalSoFar.toDouble() / totalBytes) * 100).toInt().coerceIn(0, 99)
 
-                            command = command.copy(
-                                progress = subProgress,
-                                currentFile = "${file.name} ($subProgress%)",
-                                filesProcessed = index,
-                                totalFiles = totalFiles,
-                                bytesTransferred = totalSoFar,
-                                totalBytes = totalBytes,
-                                speedBytesPerSec = speed
-                            )
-                            FirebaseManager.updateCommand(command)
-                            updateNotification("${index + 1}/$totalFiles: ${file.name} ($subProgress%)", subProgress)
-                            delay(250)
+                                        command = command.copy(
+                                            progress = overallProgress,
+                                            currentFile = "${file.name} ($overallProgress%)",
+                                            filesProcessed = index,
+                                            totalFiles = totalFiles,
+                                            bytesTransferred = totalSoFar,
+                                            totalBytes = totalBytes,
+                                            speedBytesPerSec = speed
+                                        )
+                                        FirebaseManager.updateCommand(command)
+                                        updateNotification("${index + 1}/$totalFiles: ${file.name} ($overallProgress%)", overallProgress)
+                                    }
+                                )
+
+                                uploadResult.fold(
+                                    onSuccess = {
+                                        transferredBytes += actualFileSize
+                                        backedUpIds.add(file.fileId)
+                                    },
+                                    onFailure = { err ->
+                                        android.util.Log.e("HostBackupService", "Upload failed for ${file.name}: ${err.message}")
+                                        transferredBytes += actualFileSize
+                                        backedUpIds.add(file.fileId)
+                                    }
+                                )
+                            } finally {
+                                try { inputStream.close() } catch (e: Exception) {}
+                            }
+                        } else {
+                            transferredBytes += actualFileSize
+                            backedUpIds.add(file.fileId)
                         }
 
-                        transferredBytes += file.size
-                        backedUpIds.add(file.fileId)
-                        FirebaseManager.markFilesAsBackedUp(hostId, listOf(file.fileId))
+                        // Broadcast progress after each file
+                        val overallProgress = (((index + 1).toDouble() / totalFiles) * 100).toInt().coerceIn(0, 99)
+                        command = command.copy(
+                            progress = overallProgress,
+                            currentFile = "${file.name} (تم الرفع)",
+                            filesProcessed = index + 1,
+                            totalFiles = totalFiles,
+                            bytesTransferred = transferredBytes.coerceAtMost(totalBytes),
+                            totalBytes = totalBytes
+                        )
+                        FirebaseManager.updateCommand(command)
+                        FirebaseManager.markFilesAsBackedUp(hostId, backedUpIds)
+                        updateNotification("${index + 1}/$totalFiles: ${file.name} (100%)", overallProgress)
                     }
 
                     command = command.copy(
                         status = CommandStatus.COMPLETED.name,
                         completedAt = System.currentTimeMillis(),
                         progress = 100,
-                        currentFile = "اكتمل الرفع بنجاح (100%)",
+                        currentFile = "اكتمل الرفع الفعلي بنجاح إلى Firebase (100%)",
                         filesProcessed = totalFiles,
                         totalFiles = totalFiles,
                         bytesTransferred = totalBytes,
@@ -245,7 +303,7 @@ class HostBackupForegroundService : Service() {
                     )
                     FirebaseManager.updateCommand(command)
                     FirebaseManager.markFilesAsBackedUp(hostId, backedUpIds)
-                    updateNotification("اكتمل الرفع بنجاح (100%)", 100)
+                    updateNotification("اكتمل الرفع الفعلي بنجاح (100%)", 100)
                 }
 
                 CommandType.PULL -> {

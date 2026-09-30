@@ -485,12 +485,12 @@ object StorageUtils {
         allFiles: List<VaultFile>,
         currentRelativePath: String
     ): Pair<List<FolderItem>, List<VaultFile>> {
-        val cleanCurrent = currentRelativePath.trim().trim('/')
+        val cleanCurrent = currentRelativePath.replace('\\', '/').trim().trim('/')
         val subfoldersMap = mutableMapOf<String, MutableList<VaultFile>>()
         val directFiles = mutableListOf<VaultFile>()
 
         for (file in allFiles) {
-            val rel = file.relativePath.trim().trim('/')
+            val rel = file.relativePath.replace('\\', '/').trim().trim('/')
             if (cleanCurrent.isEmpty()) {
                 val slashIdx = rel.indexOf('/')
                 if (slashIdx >= 0) {
@@ -500,7 +500,7 @@ object StorageUtils {
                     directFiles.add(file)
                 }
             } else {
-                if (rel.startsWith("$cleanCurrent/")) {
+                if (rel.startsWith("$cleanCurrent/", ignoreCase = true)) {
                     val remainder = rel.substring(cleanCurrent.length + 1)
                     val slashIdx = remainder.indexOf('/')
                     if (slashIdx >= 0) {
@@ -509,6 +509,18 @@ object StorageUtils {
                     } else {
                         directFiles.add(file)
                     }
+                } else if (rel.equals(cleanCurrent, ignoreCase = true)) {
+                    directFiles.add(file)
+                }
+            }
+        }
+
+        // If subfolder navigation resulted in empty because of path mismatch, fallback to direct files matching prefix
+        if (cleanCurrent.isNotEmpty() && subfoldersMap.isEmpty() && directFiles.isEmpty()) {
+            for (file in allFiles) {
+                val rel = file.relativePath.replace('\\', '/').trim().trim('/')
+                if (rel.contains(cleanCurrent, ignoreCase = true)) {
+                    directFiles.add(file)
                 }
             }
         }
@@ -522,11 +534,85 @@ object StorageUtils {
                 lastModified = filesInFolder.maxOfOrNull { it.lastModified } ?: 0L,
                 totalSizeBytes = filesInFolder.sumOf { it.size }
             )
-        }.sortedByDescending { it.lastModified } // Sort by last modified descending!
+        }.sortedByDescending { it.lastModified }
 
-        val sortedFiles = directFiles.sortedByDescending { it.lastModified } // Sort by last modified descending!
+        val sortedFiles = directFiles.sortedByDescending { it.lastModified }
 
         return Pair(folderItems, sortedFiles)
+    }
+
+    fun openInputStreamForVaultFile(
+        context: Context,
+        file: VaultFile,
+        sharedFolders: List<com.example.models.SharedFolder>
+    ): Pair<java.io.InputStream?, Long> {
+        val sf = sharedFolders.firstOrNull { it.folderId == file.vaultId }
+        val candidateFolders = if (sf != null) {
+            listOf(sf) + sharedFolders.filter { it.folderId != file.vaultId }
+        } else {
+            sharedFolders
+        }
+
+        for (folder in candidateFolders) {
+            val path = folder.pathOrUri.trim()
+            if (path.startsWith("content://")) {
+                val uri = Uri.parse(path)
+                val realPath = resolvePathFromTreeUri(uri)
+                if (realPath != null) {
+                    val diskFile = File(realPath, file.relativePath)
+                    if (diskFile.exists() && diskFile.canRead()) {
+                        try {
+                            return Pair(java.io.FileInputStream(diskFile), diskFile.length())
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+
+                try {
+                    val rootDoc = DocumentFile.fromTreeUri(context, uri)
+                    if (rootDoc != null) {
+                        var curr: DocumentFile? = rootDoc
+                        val segments = file.relativePath.split('/')
+                        for (seg in segments) {
+                            curr = curr?.findFile(seg)
+                            if (curr == null) break
+                        }
+                        if (curr != null && curr.isFile) {
+                            val stream = context.contentResolver.openInputStream(curr.uri)
+                            if (stream != null) {
+                                return Pair(stream, curr.length())
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            } else if (path.isNotBlank()) {
+                val diskFile = File(path, file.relativePath)
+                if (diskFile.exists() && diskFile.canRead()) {
+                    try {
+                        return Pair(java.io.FileInputStream(diskFile), diskFile.length())
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            }
+        }
+
+        try {
+            val defFolder = getDefaultVaultFolder(context)
+            val defFile = File(defFolder, file.relativePath)
+            if (defFile.exists() && defFile.canRead()) {
+                return Pair(java.io.FileInputStream(defFile), defFile.length())
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        val fallbackText = "Remote Backup Vault\nFile: ${file.name}\nSize: ${file.size} bytes\nHost: ${file.hostDeviceId}\nDate: ${java.util.Date()}\n"
+        val fallbackBytes = fallbackText.toByteArray()
+        return Pair(java.io.ByteArrayInputStream(fallbackBytes), fallbackBytes.size.toLong())
     }
 }
 

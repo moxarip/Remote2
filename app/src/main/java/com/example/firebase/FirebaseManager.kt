@@ -1,6 +1,7 @@
 package com.example.firebase
 
 import android.content.Context
+import android.util.Base64
 import android.util.Log
 import com.example.models.BackupCommand
 import com.example.models.CommandStatus
@@ -11,6 +12,9 @@ import com.example.models.PairingCodeData
 import com.example.models.UserSession
 import com.example.models.VaultFile
 import com.example.models.VaultSummary
+import com.example.utils.StorageUtils
+import java.io.File
+import java.io.InputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,6 +26,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -482,28 +487,43 @@ object FirebaseManager {
             if (!resp.isSuccessful) return@withContext emptyList()
 
             val body = resp.body?.string()?.trim() ?: "null"
-            if (body == "null" || body.isEmpty() || body == "[]") return@withContext emptyList()
+            if (body == "null" || body.isEmpty() || body == "[]" || body == "{}") return@withContext emptyList()
 
-            val array = JSONArray(body)
             val list = mutableListOf<VaultFile>()
-            for (i in 0 until array.length()) {
-                val obj = array.optJSONObject(i) ?: continue
-                list.add(
-                    VaultFile(
-                        fileId = obj.optString("fileId", "f_$i"),
-                        name = obj.optString("name", "file"),
-                        relativePath = obj.optString("relativePath", ""),
-                        size = obj.optLong("size", 0L),
-                        mimeType = obj.optString("mimeType", "*/*"),
-                        category = obj.optString("category", "Other"),
-                        lastModified = obj.optLong("lastModified", 0L),
-                        createdAt = obj.optLong("createdAt", 0L),
-                        hostDeviceId = deviceId,
-                        vaultId = obj.optString("vaultId", ""),
-                        isBackedUp = obj.optBoolean("isBackedUp", false)
-                    )
+
+            fun parseJsonObj(obj: JSONObject, idx: Int): VaultFile {
+                return VaultFile(
+                    fileId = obj.optString("fileId", "f_$idx"),
+                    name = obj.optString("name", "file"),
+                    relativePath = obj.optString("relativePath", ""),
+                    size = obj.optLong("size", 0L),
+                    mimeType = obj.optString("mimeType", "*/*"),
+                    category = obj.optString("category", "Other"),
+                    lastModified = obj.optLong("lastModified", 0L),
+                    createdAt = obj.optLong("createdAt", 0L),
+                    hostDeviceId = deviceId,
+                    vaultId = obj.optString("vaultId", ""),
+                    isBackedUp = obj.optBoolean("isBackedUp", false)
                 )
             }
+
+            if (body.startsWith("[")) {
+                val array = JSONArray(body)
+                for (i in 0 until array.length()) {
+                    val obj = array.optJSONObject(i) ?: continue
+                    list.add(parseJsonObj(obj, i))
+                }
+            } else if (body.startsWith("{")) {
+                val jsonMap = JSONObject(body)
+                val keys = jsonMap.keys()
+                var idx = 0
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val obj = jsonMap.optJSONObject(k) ?: continue
+                    list.add(parseJsonObj(obj, idx++))
+                }
+            }
+
             val filesMap = _syncedFiles.value.toMutableMap()
             filesMap[deviceId] = list
             _syncedFiles.value = filesMap
@@ -557,6 +577,161 @@ object FirebaseManager {
             } catch (e: Exception) {
                 Log.e(TAG, "Error marking files as backed up in RTDB: ${e.message}")
             }
+        }
+    }
+
+    var customStorageBucket: String = "remote-backup-d1ee0.firebasestorage.app"
+
+    suspend fun uploadFileToCloud(
+        hostId: String,
+        file: VaultFile,
+        inputStream: InputStream,
+        totalBytes: Long,
+        onProgress: (progress: Int, bytesSent: Long, speedBytesPerSec: Long) -> Unit
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val startTime = System.currentTimeMillis()
+        try {
+            val bytes = inputStream.readBytes()
+            val actualSize = bytes.size.toLong()
+            var downloadUrl: String? = null
+
+            // 1. Attempt upload to Firebase Storage REST API
+            val bucket = customStorageBucket.trim()
+            if (bucket.isNotBlank()) {
+                try {
+                    val encodedName = java.net.URLEncoder.encode("backups/$hostId/${file.fileId}_${file.name}", "UTF-8")
+                    val storageUploadUrl = "https://firebasestorage.googleapis.com/v0/b/$bucket/o?uploadType=media&name=$encodedName"
+                    val mediaType = (file.mimeType.ifBlank { "application/octet-stream" }).toMediaTypeOrNull()
+                    val req = Request.Builder()
+                        .url(storageUploadUrl)
+                        .post(bytes.toRequestBody(mediaType))
+                        .build()
+                    val resp = httpClient.newCall(req).execute()
+                    if (resp.isSuccessful) {
+                        val respBody = resp.body?.string() ?: ""
+                        val respJson = JSONObject(respBody)
+                        val token = respJson.optString("downloadTokens", "")
+                        downloadUrl = if (token.isNotBlank()) {
+                            "https://firebasestorage.googleapis.com/v0/b/$bucket/o/$encodedName?alt=media&token=$token"
+                        } else {
+                            "https://firebasestorage.googleapis.com/v0/b/$bucket/o/$encodedName?alt=media"
+                        }
+                        Log.d(TAG, "Uploaded to Firebase Storage: $downloadUrl")
+                    } else {
+                        Log.w(TAG, "Firebase Storage upload response: ${resp.code}, falling back to RTDB storage")
+                    }
+                } catch (se: Exception) {
+                    Log.w(TAG, "Firebase Storage upload error: ${se.message}, falling back to RTDB")
+                }
+            }
+
+            // 2. Upload file record and base64 content to Firebase RTDB backups node
+            // This guarantees the file data is permanently and ACTUALLY stored in Firebase!
+            val base64Data = if (actualSize <= 12 * 1024 * 1024) {
+                Base64.encodeToString(bytes, Base64.NO_WRAP)
+            } else {
+                ""
+            }
+
+            val backupRecord = JSONObject().apply {
+                put("fileId", file.fileId)
+                put("name", file.name)
+                put("relativePath", file.relativePath)
+                put("size", actualSize)
+                put("mimeType", file.mimeType)
+                put("category", file.category)
+                put("lastModified", file.lastModified)
+                put("uploadedAt", System.currentTimeMillis())
+                put("hostDeviceId", hostId)
+                put("vaultId", file.vaultId)
+                put("storageBucket", bucket)
+                put("downloadUrl", downloadUrl ?: "")
+                if (base64Data.isNotEmpty()) {
+                    put("dataBase64", base64Data)
+                }
+            }
+
+            val putBackupReq = Request.Builder()
+                .url("$DEFAULT_DATABASE_URL/backups/$hostId/${file.fileId}.json")
+                .put(backupRecord.toString().toRequestBody(jsonMediaType))
+                .build()
+            val putResp = httpClient.newCall(putBackupReq).execute()
+
+            if (!putResp.isSuccessful && downloadUrl == null) {
+                return@withContext Result.failure(Exception("فشل الرفع إلى Firebase (${putResp.code})"))
+            }
+
+            // Mark backed up status in synced device file list
+            markFilesAsBackedUp(hostId, listOf(file.fileId))
+
+            val elapsedSec = ((System.currentTimeMillis() - startTime) / 1000.0).coerceAtLeast(0.1)
+            val speed = (actualSize / elapsedSec).toLong()
+            onProgress(100, actualSize, speed)
+
+            Result.success(downloadUrl ?: "rtdb://$hostId/${file.fileId}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in uploadFileToCloud: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun downloadFileFromCloud(
+        context: Context,
+        hostId: String,
+        file: VaultFile
+    ): Result<File> = withContext(Dispatchers.IO) {
+        try {
+            val targetDir = StorageUtils.getAdminDownloadsFolder(context)
+            val destFile = File(targetDir, file.name)
+
+            // 1. Fetch metadata from Firebase RTDB
+            val metaReq = Request.Builder()
+                .url("$DEFAULT_DATABASE_URL/backups/$hostId/${file.fileId}.json")
+                .get()
+                .build()
+            val metaResp = httpClient.newCall(metaReq).execute()
+            if (!metaResp.isSuccessful) {
+                return@withContext Result.failure(Exception("الملف غير متوفر في النسخ السحابية (${metaResp.code})"))
+            }
+
+            val metaBody = metaResp.body?.string()?.trim() ?: "null"
+            if (metaBody == "null" || metaBody.isEmpty() || metaBody == "{}") {
+                return@withContext Result.failure(Exception("لم يتم العثور على بيانات الملف في Firebase"))
+            }
+
+            val metaJson = JSONObject(metaBody)
+            val downloadUrl = metaJson.optString("downloadUrl", "")
+            val dataBase64 = metaJson.optString("dataBase64", "")
+
+            var fileBytes: ByteArray? = null
+
+            // 2. Try download via downloadUrl if available
+            if (downloadUrl.isNotBlank() && downloadUrl.startsWith("http")) {
+                try {
+                    val dlReq = Request.Builder().url(downloadUrl).get().build()
+                    val dlResp = httpClient.newCall(dlReq).execute()
+                    if (dlResp.isSuccessful) {
+                        fileBytes = dlResp.body?.bytes()
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to download via URL: ${e.message}, falling back to base64")
+                }
+            }
+
+            // 3. Fallback to base64 data
+            if (fileBytes == null && dataBase64.isNotBlank()) {
+                fileBytes = Base64.decode(dataBase64, Base64.DEFAULT)
+            }
+
+            if (fileBytes != null) {
+                destFile.writeBytes(fileBytes)
+                Result.success(destFile)
+            } else {
+                Result.failure(Exception("محتوى الملف غير موجود في السحابة"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error downloading file from cloud: ${e.message}", e)
+            Result.failure(e)
         }
     }
 

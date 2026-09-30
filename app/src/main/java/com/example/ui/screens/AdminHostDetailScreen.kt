@@ -148,13 +148,53 @@ fun AdminHostDetailScreen(
     val categories = listOf("All", "Photos", "Videos", "Documents", "Other")
 
     // The shared folders in the exact order of addition ("يظهرون في آدمين بترتيب اضافتهم")
-    val orderedSharedFolders = host.sharedFolders
+    val orderedSharedFolders = remember(host) {
+        if (host.sharedFolders.isNotEmpty()) {
+            host.sharedFolders
+        } else if (host.vaultPath.isNotBlank()) {
+            listOf(
+                SharedFolder(
+                    folderId = "vault_default",
+                    name = if (host.vaultPath.contains("whatsapp", ignoreCase = true)) "واتساب (WhatsApp)" else "المجلد المصرح به",
+                    pathOrUri = host.vaultPath,
+                    fileCount = host.fileCount
+                )
+            )
+        } else {
+            emptyList()
+        }
+    }
 
     // Files filtered by selected shared folder (if any)
-    val folderFilteredFiles = if (selectedSharedFolderId == null) {
-        files
-    } else {
-        files.filter { it.vaultId == selectedSharedFolderId }
+    val folderFilteredFiles = remember(files, selectedSharedFolderId, orderedSharedFolders) {
+        if (selectedSharedFolderId == null) {
+            files
+        } else {
+            val selectedFolder = orderedSharedFolders.firstOrNull { it.folderId == selectedSharedFolderId }
+            val folderId = selectedFolder?.folderId ?: selectedSharedFolderId ?: ""
+            val folderName = selectedFolder?.name?.trim() ?: ""
+            val folderPath = selectedFolder?.pathOrUri?.trim() ?: ""
+
+            val filtered = files.filter { file ->
+                file.vaultId == folderId ||
+                file.vaultId == folderPath ||
+                (folderId.contains("default", ignoreCase = true) && (file.vaultId.isBlank() || file.vaultId.contains("default", ignoreCase = true))) ||
+                (folderName.isNotBlank() && file.relativePath.replace('\\', '/').startsWith("$folderName/", ignoreCase = true)) ||
+                (folderName.isNotBlank() && file.relativePath.contains(folderName, ignoreCase = true))
+            }
+
+            if (filtered.isNotEmpty()) {
+                filtered
+            } else if (orderedSharedFolders.size <= 1) {
+                files
+            } else {
+                val fallback = files.filter { f ->
+                    (folderName.isNotBlank() && f.relativePath.contains(folderName, ignoreCase = true)) ||
+                    (folderPath.isNotBlank() && f.relativePath.contains(folderPath.substringAfterLast('/'), ignoreCase = true))
+                }
+                if (fallback.isNotEmpty()) fallback else files
+            }
+        }
     }
 
     // Category and search filtering
@@ -734,22 +774,46 @@ fun AdminHostDetailScreen(
                             )
                         }
                     } else if (subfolders.isEmpty()) {
-                        item {
-                            Surface(
-                                color = SlateCard,
-                                shape = RoundedCornerShape(12.dp),
-                                border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier.padding(24.dp)
+                        if (matchingFiles.isNotEmpty()) {
+                            item {
+                                Text(
+                                    text = "الملفات (${matchingFiles.size}):",
+                                    color = TextMuted,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(top = 4.dp, bottom = 6.dp)
+                                )
+                            }
+                            items(matchingFiles, key = { it.fileId }) { file ->
+                                val isSelected = selectedFileIds.contains(file.fileId)
+                                val isDownloaded = downloadedFileNames.contains(file.name)
+                                VaultFileRowItem(
+                                    file = file,
+                                    isSelected = isSelected,
+                                    isDownloaded = isDownloaded,
+                                    onToggle = { onToggleFileSelect(file.fileId) },
+                                    onQuickDownload = { onDownloadFile(file) },
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                            }
+                        } else {
+                            item {
+                                Surface(
+                                    color = SlateCard,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    Text(
-                                        text = "هذا المجلد لا يحتوي على أي ملفات مطابقة",
-                                        color = TextSecondary,
-                                        fontSize = 13.sp
-                                    )
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.padding(24.dp)
+                                    ) {
+                                        Text(
+                                            text = "هذا المجلد لا يحتوي على أي ملفات مطابقة",
+                                            color = TextSecondary,
+                                            fontSize = 13.sp
+                                        )
+                                    }
                                 }
                             }
                         }

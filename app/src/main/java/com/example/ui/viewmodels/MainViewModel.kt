@@ -332,25 +332,42 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun downloadFileToAdmin(file: VaultFile) {
         val host = _selectedHost.value
+        val hostId = host?.deviceId ?: file.hostDeviceId
         val hostPath = host?.vaultPath ?: ""
         viewModelScope.launch {
-            StorageUtils.downloadFileToAdmin(getApplication(), file, hostPath)
-            refreshDownloadedFiles()
-            _snackbarMessage.value = "تم تنزيل ${file.name} إلى هاتف الآدمن بنجاح"
+            _snackbarMessage.value = "جاري تنزيل ${file.name} من Firebase..."
+            val result = FirebaseManager.downloadFileFromCloud(getApplication(), hostId, file)
+            result.fold(
+                onSuccess = { downloadedFile ->
+                    refreshDownloadedFiles()
+                    _snackbarMessage.value = "تم تنزيل ${downloadedFile.name} بنجاح من السحابة إلى التنزيلات"
+                },
+                onFailure = {
+                    // Fallback to local resolver if needed
+                    StorageUtils.downloadFileToAdmin(getApplication(), file, hostPath)
+                    refreshDownloadedFiles()
+                    _snackbarMessage.value = "تم تنزيل ${file.name} إلى هاتف الآدمن بنجاح"
+                }
+            )
         }
     }
 
     fun downloadAllUploadedFilesToAdmin(files: List<VaultFile>) {
         val host = _selectedHost.value
+        val hostId = host?.deviceId ?: ""
         val hostPath = host?.vaultPath ?: ""
         viewModelScope.launch {
+            _snackbarMessage.value = "جاري تنزيل ${files.size} ملفات من السحابة..."
             var count = 0
             for (f in files) {
-                StorageUtils.downloadFileToAdmin(getApplication(), f, hostPath)
+                val result = FirebaseManager.downloadFileFromCloud(getApplication(), hostId, f)
+                if (result.isFailure) {
+                    StorageUtils.downloadFileToAdmin(getApplication(), f, hostPath)
+                }
                 count++
             }
             refreshDownloadedFiles()
-            _snackbarMessage.value = "تم تنزيل $count ملفات بنجاح إلى هاتف الآدمن"
+            _snackbarMessage.value = "اكتمل تنزيل $count ملفات بنجاح إلى مجلد التنزيلات"
         }
     }
 

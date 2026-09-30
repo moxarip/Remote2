@@ -47,6 +47,15 @@ class BackupRepository(private val context: Context) {
         private const val KEY_SAVED_VAULT_PATH = "saved_vault_path"
         private const val KEY_SAVED_SHARED_FOLDERS = "saved_shared_folders"
         private const val KEY_ADMIN_LAST_EMAIL = "admin_last_email"
+
+        @Volatile
+        private var INSTANCE: BackupRepository? = null
+
+        fun getInstance(context: Context): BackupRepository {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: BackupRepository(context.applicationContext).also { INSTANCE = it }
+            }
+        }
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -274,6 +283,28 @@ class BackupRepository(private val context: Context) {
 
         scanLocalVault()
         startHostKeepAliveHeartbeat()
+        startHostCommandListener()
+    }
+
+    private var commandListenerJob: Job? = null
+
+    fun startHostCommandListener() {
+        commandListenerJob?.cancel()
+        commandListenerJob = repoScope.launch {
+            FirebaseManager.syncedCommands.collect { map ->
+                val host = _currentHostDevice.value ?: return@collect
+                val myCommands = map[host.deviceId] ?: emptyList()
+                val pendingCmd = myCommands.firstOrNull { it.status == CommandStatus.PENDING.name }
+                if (pendingCmd != null) {
+                    android.util.Log.d("BackupRepository", "Host detected pending command: ${pendingCmd.commandId} (${pendingCmd.type})")
+                    HostBackupForegroundService.startCommand(
+                        context = context,
+                        command = pendingCmd,
+                        vaultPath = _selectedVaultPath.value
+                    )
+                }
+            }
+        }
     }
 
     fun startHostKeepAliveHeartbeat() {
@@ -407,8 +438,39 @@ class BackupRepository(private val context: Context) {
     }
 
     fun scanLocalVault() {
-        val host = _currentHostDevice.value ?: return
-        val folders = _sharedFolders.value
+        val host = _currentHostDevice.value ?: HostDevice(
+            deviceId = localDeviceId,
+            userId = _currentUser.value?.userId ?: "user_default",
+            name = localDeviceName,
+            role = DeviceRole.HOST.name,
+            status = "ONLINE"
+        ).also { _currentHostDevice.value = it }
+
+        val folders = if (_sharedFolders.value.isNotEmpty()) {
+            _sharedFolders.value
+        } else {
+            val defaultList = mutableListOf<SharedFolder>()
+            val def = StorageUtils.getDefaultVaultFolder(context)
+            defaultList.add(
+                SharedFolder(
+                    folderId = "folder_default",
+                    name = "المجلد الافتراضي (RemoteVault)",
+                    pathOrUri = def.absolutePath,
+                    addedAt = System.currentTimeMillis()
+                )
+            )
+            if (_selectedVaultPath.value.isNotBlank()) {
+                defaultList.add(
+                    SharedFolder(
+                        folderId = "folder_custom",
+                        name = StorageUtils.getFolderDisplayName(context, _selectedVaultPath.value),
+                        pathOrUri = _selectedVaultPath.value,
+                        addedAt = System.currentTimeMillis()
+                    )
+                )
+            }
+            defaultList
+        }
 
         val allFiles = mutableListOf<VaultFile>()
         val updatedFolders = mutableListOf<SharedFolder>()

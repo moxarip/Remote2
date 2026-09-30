@@ -355,6 +355,36 @@ fun HostDashboardScreen(
                                         onRemove = { onRemoveSharedFolder(folder.folderId) }
                                     )
                                 }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                // Persistent '+' button inside list so user can keep adding folder 2, folder 3...
+                                Surface(
+                                    color = SlateCardElevated,
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { dirPickerLauncher.launch(null) }
+                                        .testTag("host_add_another_folder_button")
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp, horizontal = 16.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = "Add Another Folder", tint = ElectricBlue, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "إضافة مجلد آخر (+)",
+                                            color = ElectricBlue,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
