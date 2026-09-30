@@ -16,8 +16,8 @@ android {
     applicationId = "com.moxarip.remotebackup"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = 2
+    versionName = "1.0.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -134,22 +134,21 @@ dependencies {
   "ksp"(libs.moshi.kotlin.codegen)
 }
 
-val syncApkTo123 = tasks.register<Copy>("syncApkTo123") {
-    from(layout.buildDirectory.dir("outputs/apk/debug")) {
-        include("*.apk")
-    }
-    into(rootProject.layout.projectDirectory.dir("123"))
-}
-
-val copy123NamedApk = tasks.register<Copy>("copy123NamedApk") {
+val syncApkToBuildOutputs = tasks.register<Copy>("syncApkToBuildOutputs") {
     from(layout.buildDirectory.dir("outputs/apk/debug")) {
         include("app-debug.apk")
-        rename { "123.apk" }
     }
-    into(rootProject.layout.projectDirectory.dir("123"))
+    into(rootProject.layout.projectDirectory.dir("build-outputs"))
+}
+
+val syncApkToDotBuildOutputs = tasks.register<Copy>("syncApkToDotBuildOutputs") {
+    from(layout.buildDirectory.dir("outputs/apk/debug")) {
+        include("app-debug.apk")
+    }
+    into(rootProject.layout.projectDirectory.dir(".build-outputs"))
 }
 
 tasks.matching { it.name == "packageDebug" || it.name == "assembleDebug" || it.name == "assemble" }.configureEach {
-    finalizedBy(syncApkTo123, copy123NamedApk)
+    finalizedBy(syncApkToBuildOutputs, syncApkToDotBuildOutputs)
 }
 

@@ -1,8 +1,0 @@
-Build Timestamp: 2026-09-30 12:13:00 UTC
-Version: 1.0.0 (Debug)
-Included Features:
-- Admin Alert Notification (Heads-up, dismiss without opening)
-- Remote Storage Node & SAF Directory Tree Authorization
-- Full Recursive Folder Browsing (including Android/media)
-- Protected Folder Indication
-- On-Demand File Streaming and Transfer
