@@ -63,6 +63,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -134,6 +135,7 @@ fun AdminHostDetailScreen(
     onCategoryChanged: (String) -> Unit,
     onSearchChanged: (String) -> Unit,
     onRefreshFiles: () -> Unit = {},
+    onRefreshFolder: (String) -> Unit = {},
     onDownloadFile: (VaultFile) -> Unit = {},
     onDownloadAllUploaded: (List<VaultFile>) -> Unit = {},
     onUploadSingleFile: (VaultFile) -> Unit = {},
@@ -154,6 +156,12 @@ fun AdminHostDetailScreen(
     var activeFileForAction by remember { mutableStateOf<VaultFile?>(null) }
     var protectedFolderNotice by remember { mutableStateOf<String?>(null) }
     var showNotificationDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedSharedFolderId) {
+        selectedSharedFolderId?.let { fId ->
+            onRefreshFolder(fId)
+        }
+    }
 
     // System Back Handler: navigate up subfolder first, or exit screen
     BackHandler {
@@ -807,7 +815,12 @@ fun AdminHostDetailScreen(
                     }
 
                     // NOTICE: If host reports files exist but cloud files list is still syncing
-                    if (files.isEmpty() && host.fileCount > 0) {
+                    val currentSelectedFolder = orderedSharedFolders.firstOrNull { it.folderId == selectedSharedFolderId }
+                    val folderExpectedCount = currentSelectedFolder?.fileCount ?: host.fileCount
+                    val isFolderEmptyWhileExpected = (selectedSharedFolderId == null && files.isEmpty() && host.fileCount > 0) ||
+                            (currentSelectedFolder != null && folderFilteredFiles.isEmpty() && folderExpectedCount > 0)
+
+                    if (isFolderEmptyWhileExpected) {
                         item {
                             Surface(
                                 color = AmberPending.copy(alpha = 0.12f),
@@ -825,7 +838,7 @@ fun AdminHostDetailScreen(
                                         Icon(Icons.Default.Sync, contentDescription = null, tint = AmberPending, modifier = Modifier.size(20.dp))
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text(
-                                            text = "تم رصد ${host.fileCount} ملف في الهوست، والملفات قيد المزامنة السحابية",
+                                            text = "تم رصد $folderExpectedCount ملف في الهوست، والملفات قيد المزامنة السحابية",
                                             color = TextPrimary,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 12.sp
@@ -840,13 +853,19 @@ fun AdminHostDetailScreen(
                                     Spacer(modifier = Modifier.height(10.dp))
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Button(
-                                            onClick = onRefreshFiles,
+                                            onClick = {
+                                                if (currentSelectedFolder != null) {
+                                                    onRefreshFolder(currentSelectedFolder.folderId)
+                                                } else {
+                                                    onRefreshFiles()
+                                                }
+                                            },
                                             colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
                                             shape = RoundedCornerShape(8.dp)
                                         ) {
                                             Icon(Icons.Default.Refresh, contentDescription = null, tint = SlateDark, modifier = Modifier.size(14.dp))
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text("تحديث الملفات", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                            Text("تحديث وجلب الملفات", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                         }
 
                                         OutlinedButton(

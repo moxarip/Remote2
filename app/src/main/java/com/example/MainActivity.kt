@@ -252,6 +252,7 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                             viewModel.refreshSelectedHostFiles()
                             viewModel.refreshDownloadedFiles()
                         },
+                        onRefreshFolder = viewModel::refreshFolderFiles,
                         onDownloadFile = viewModel::downloadFileToAdmin,
                         onDownloadAllUploaded = viewModel::downloadAllUploadedFilesToAdmin,
                         onOpenFile = viewModel::openDownloadedFile,

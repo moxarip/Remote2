@@ -86,6 +86,7 @@ import com.example.ui.components.FileCategoryIcon
 import com.example.ui.components.PairingCodeCard
 import com.example.ui.components.StatusBadge
 import com.example.ui.components.StorageProgressBar
+import com.example.ui.theme.AmberPending
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.ElectricBlue
 import com.example.ui.theme.EmeraldOnline
@@ -707,7 +708,8 @@ fun HostDashboardScreen(
             folder = currentFolder,
             files = folderFiles,
             onDismiss = { folderToBrowse = null },
-            onUploadFiles = onUploadFiles
+            onUploadFiles = onUploadFiles,
+            onScanFolder = onScanVault
         )
     }
 }
@@ -791,7 +793,8 @@ fun HostFolderExplorerDialog(
     folder: SharedFolder,
     files: List<VaultFile>,
     onDismiss: () -> Unit,
-    onUploadFiles: (List<VaultFile>) -> Unit = {}
+    onUploadFiles: (List<VaultFile>) -> Unit = {},
+    onScanFolder: () -> Unit = {}
 ) {
     var currentSubPath by remember { mutableStateOf("") }
     var selectedFileIds by remember { mutableStateOf(setOf<String>()) }
@@ -1106,15 +1109,37 @@ fun HostFolderExplorerDialog(
                                 modifier = Modifier.padding(20.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text(
-                                    text = if (searchQuery.isNotBlank()) "لا توجد ملفات تطابق بحثك" else "لا توجد ملفات في هذا المسار",
-                                    color = TextSecondary,
-                                    fontSize = 12.sp
-                                )
-                                if (viewMode != "all_files" && files.isNotEmpty()) {
+                                if (files.isEmpty() && folder.fileCount > 0) {
+                                    Icon(Icons.Default.Sync, contentDescription = null, tint = AmberPending, modifier = Modifier.size(24.dp))
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    TextButton(onClick = { viewMode = "all_files" }) {
-                                        Text("عرض جميع ملفات المجلد (${files.size})", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    Text(
+                                        text = "المجلد مسجل به ${folder.fileCount} ملف، اضغط لجلب وعرض الملفات فوراً:",
+                                        color = TextPrimary,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Button(
+                                        onClick = onScanFolder,
+                                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, tint = SlateDark, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("فحص وتحديث المجلد الآن", color = SlateDark, fontWeight = FontWeight.Bold)
+                                    }
+                                } else {
+                                    Text(
+                                        text = if (searchQuery.isNotBlank()) "لا توجد ملفات تطابق بحثك" else "لا توجد ملفات في هذا المسار",
+                                        color = TextSecondary,
+                                        fontSize = 12.sp
+                                    )
+                                    if (viewMode != "all_files" && files.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        TextButton(onClick = { viewMode = "all_files" }) {
+                                            Text("عرض جميع ملفات المجلد (${files.size})", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
                                     }
                                 }
                             }

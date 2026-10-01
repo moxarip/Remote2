@@ -318,7 +318,7 @@ object FirebaseManager {
 
                 val req = Request.Builder()
                     .url("$DEFAULT_DATABASE_URL/devices/${device.deviceId}.json")
-                    .put(json.toString().toRequestBody(jsonMediaType))
+                    .patch(json.toString().toRequestBody(jsonMediaType))
                     .build()
                 httpClient.newCall(req).execute()
                 Log.d(TAG, "Updated device ${device.deviceId} in Firebase RTDB")
@@ -443,6 +443,8 @@ object FirebaseManager {
 
         scope.launch {
             try {
+                val batchSize = 350
+
                 // 1. Immediately patch high-level summary so Admin sees real device numbers
                 val patchDev = JSONObject().apply {
                     put("fileCount", summary.filesFound)
@@ -455,9 +457,13 @@ object FirebaseManager {
                     .url("$DEFAULT_DATABASE_URL/devices/$deviceId.json")
                     .patch(patchDev.toString().toRequestBody(jsonMediaType))
                     .build()
-                httpClient.newCall(patchReq).execute()
+                try {
+                    httpClient.newCall(patchReq).execute().close()
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed patching device stats: ${e.message}")
+                }
 
-                // Helper to create compact JSON for each file
+                // Helper to create compact JSON for each file (omit local uriString to stay lightweight)
                 fun fileToJson(f: VaultFile): JSONObject = JSONObject().apply {
                     put("fileId", f.fileId)
                     put("name", f.name)
@@ -467,46 +473,13 @@ object FirebaseManager {
                     put("mimeType", f.mimeType)
                     put("category", f.category)
                     put("lastModified", f.lastModified)
-                    put("folderId", f.folderId.ifBlank { f.vaultId })
-                    put("vaultId", f.vaultId.ifBlank { f.folderId })
+                    val fld = f.folderId.ifBlank { f.vaultId }
+                    if (fld.isNotBlank()) put("folderId", fld)
                     if (f.isBackedUp) put("isBackedUp", true)
-                    if (f.uriString.isNotBlank()) put("uriString", f.uriString)
-                    if (f.remoteStoragePath.isNotBlank()) put("remoteStoragePath", f.remoteStoragePath)
                     if (f.downloadUrl.isNotBlank()) put("downloadUrl", f.downloadUrl)
                 }
 
-                // 2. Chunked upload to /devices/$deviceId/files.json
-                // We upload in batches of 250 files using PUT for first batch and PATCH for rest.
-                // Firebase RTDB automatically merges integer keys into a JSON array without socket timeout.
-                val batchSize = 250
-                if (files.isEmpty()) {
-                    val emptyReq = Request.Builder()
-                        .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
-                        .put("[]".toRequestBody(jsonMediaType))
-                        .build()
-                    httpClient.newCall(emptyReq).execute()
-                } else {
-                    for (startIndex in 0 until files.size step batchSize) {
-                        val endIndex = minOf(startIndex + batchSize, files.size)
-                        val batchObj = JSONObject()
-                        for (i in startIndex until endIndex) {
-                            batchObj.put(i.toString(), fileToJson(files[i]))
-                        }
-                        val req = Request.Builder()
-                            .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
-                            .patch(batchObj.toString().toRequestBody(jsonMediaType))
-                            .build()
-                        try {
-                            httpClient.newCall(req).execute()
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Retrying batch $startIndex..$endIndex: ${e.message}")
-                            // One retry on transient failure
-                            try { httpClient.newCall(req).execute() } catch (ex: Exception) { Log.e(TAG, "Batch failed: ${ex.message}") }
-                        }
-                    }
-                }
-
-                // 3. Also upload per-folder files index for instant folder browsing: /devices/$deviceId/folders/$folderId/files.json
+                // 2. Upload per-folder files FIRST so each folder becomes immediately browsable on Admin
                 val filesByFolder = files.groupBy { it.folderId.ifBlank { it.vaultId } }
                 for ((folderId, folderFiles) in filesByFolder) {
                     if (folderId.isBlank()) continue
@@ -516,14 +489,46 @@ object FirebaseManager {
                         for (i in startIndex until endIndex) {
                             batchObj.put(i.toString(), fileToJson(folderFiles[i]))
                         }
-                        val req = Request.Builder()
+                        val bodyData = batchObj.toString().toRequestBody(jsonMediaType)
+                        val req1 = Request.Builder()
                             .url("$DEFAULT_DATABASE_URL/devices/$deviceId/folders/$folderId/files.json")
-                            .patch(batchObj.toString().toRequestBody(jsonMediaType))
+                            .patch(bodyData)
                             .build()
                         try {
-                            httpClient.newCall(req).execute()
+                            httpClient.newCall(req1).execute().close()
                         } catch (e: Exception) {
-                            Log.w(TAG, "Folder batch failed for $folderId: ${e.message}")
+                            Log.w(TAG, "Folder batch failed for $folderId ($startIndex..$endIndex): ${e.message}")
+                        }
+                    }
+                }
+
+                // 3. Upload combined files list to /devices/$deviceId/files.json
+                if (files.isEmpty()) {
+                    val emptyReq = Request.Builder()
+                        .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
+                        .put("[]".toRequestBody(jsonMediaType))
+                        .build()
+                    try {
+                        httpClient.newCall(emptyReq).execute().close()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Empty files update failed: ${e.message}")
+                    }
+                } else {
+                    for (startIndex in 0 until files.size step batchSize) {
+                        val endIndex = minOf(startIndex + batchSize, files.size)
+                        val batchObj = JSONObject()
+                        for (i in startIndex until endIndex) {
+                            batchObj.put(i.toString(), fileToJson(files[i]))
+                        }
+                        val bodyData = batchObj.toString().toRequestBody(jsonMediaType)
+                        val req2 = Request.Builder()
+                            .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
+                            .patch(bodyData)
+                            .build()
+                        try {
+                            httpClient.newCall(req2).execute().close()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Batch upload failed ($startIndex..$endIndex): ${e.message}")
                         }
                     }
                 }
@@ -537,10 +542,27 @@ object FirebaseManager {
     suspend fun fetchFolderFiles(deviceId: String, folderId: String): List<VaultFile> = withContext(Dispatchers.IO) {
         if (folderId.isBlank()) return@withContext emptyList()
         try {
-            val req = Request.Builder().url("$DEFAULT_DATABASE_URL/devices/$deviceId/folders/$folderId/files.json").get().build()
-            val resp = httpClient.newCall(req).execute()
-            if (!resp.isSuccessful) return@withContext emptyList()
-            val body = resp.body?.string()?.trim() ?: "null"
+            var body = "null"
+            val urls = listOf(
+                "$DEFAULT_DATABASE_URL/devices/$deviceId/folders/$folderId/files.json",
+                "$DEFAULT_DATABASE_URL/device_files/$deviceId/folders/$folderId/files.json"
+            )
+            for (u in urls) {
+                try {
+                    val req = Request.Builder().url(u).get().build()
+                    val resp = httpClient.newCall(req).execute()
+                    if (resp.isSuccessful) {
+                        val b = resp.body?.string()?.trim() ?: "null"
+                        if (b != "null" && b.isNotEmpty() && b != "[]" && b != "{}") {
+                            body = b
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error checking url $u: ${e.message}")
+                }
+            }
+
             if (body == "null" || body.isEmpty() || body == "[]" || body == "{}") return@withContext emptyList()
 
             val list = mutableListOf<VaultFile>()
@@ -608,11 +630,26 @@ object FirebaseManager {
 
     suspend fun fetchHostFiles(deviceId: String): List<VaultFile> = withContext(Dispatchers.IO) {
         try {
-            val req = Request.Builder().url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json").get().build()
-            val resp = httpClient.newCall(req).execute()
-            if (!resp.isSuccessful) return@withContext emptyList()
-
-            val body = resp.body?.string()?.trim() ?: "null"
+            var body = "null"
+            val primaryUrls = listOf(
+                "$DEFAULT_DATABASE_URL/device_files/$deviceId/files.json",
+                "$DEFAULT_DATABASE_URL/devices/$deviceId/files.json"
+            )
+            for (u in primaryUrls) {
+                try {
+                    val req = Request.Builder().url(u).get().build()
+                    val resp = httpClient.newCall(req).execute()
+                    if (resp.isSuccessful) {
+                        val b = resp.body?.string()?.trim() ?: "null"
+                        if (b != "null" && b.isNotEmpty() && b != "[]" && b != "{}") {
+                            body = b
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error checking files from $u: ${e.message}")
+                }
+            }
             val list = mutableListOf<VaultFile>()
 
             fun parseJsonObj(obj: JSONObject, idx: Int): VaultFile {
@@ -694,6 +731,18 @@ object FirebaseManager {
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Folders fallback check failed: ${e.message}")
+                }
+            }
+
+            // Fallback: Check each known shared folder directly
+            if (list.isEmpty()) {
+                val knownFolders = _syncedDevices.value[deviceId]?.sharedFolders ?: emptyList()
+                for (sf in knownFolders) {
+                    if (sf.folderId.isBlank()) continue
+                    val folderFiles = fetchFolderFiles(deviceId, sf.folderId)
+                    for (f in folderFiles) {
+                        if (list.none { it.fileId == f.fileId }) list.add(f)
+                    }
                 }
             }
 

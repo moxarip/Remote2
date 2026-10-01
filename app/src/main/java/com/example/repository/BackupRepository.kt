@@ -129,9 +129,96 @@ class BackupRepository(private val context: Context) {
     init {
         FirebaseManager.init(context)
         _sharedFolders.value = loadSavedSharedFolders()
+        val cachedFiles = loadCachedHostFiles()
+        _hostFiles.value = cachedFiles
         val defaultDir = StorageUtils.getDefaultVaultFolder(context)
         val savedVault = prefs.getString(KEY_SAVED_VAULT_PATH, null)
         _selectedVaultPath.value = if (!savedVault.isNullOrBlank()) savedVault else defaultDir.absolutePath
+
+        if (cachedFiles.isNotEmpty()) {
+            repoScope.launch(Dispatchers.IO) {
+                delay(2000)
+                val summary = VaultSummary(
+                    filesFound = cachedFiles.size,
+                    foldersFound = _sharedFolders.value.size,
+                    totalSizeBytes = cachedFiles.sumOf { it.size },
+                    lastScanTime = System.currentTimeMillis(),
+                    vaultPath = _selectedVaultPath.value
+                )
+                FirebaseManager.uploadVaultMetadata(localDeviceId, cachedFiles, summary)
+            }
+        }
+    }
+
+    private fun loadCachedHostFiles(): List<VaultFile> {
+        val cacheFile = File(context.filesDir, "cached_host_files.json")
+        if (!cacheFile.exists() || cacheFile.length() == 0L) return emptyList()
+        return try {
+            val jsonStr = cacheFile.readText()
+            val arr = JSONArray(jsonStr)
+            val list = mutableListOf<VaultFile>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val fName = obj.optString("name", "file")
+                list.add(
+                    VaultFile(
+                        fileId = obj.optString("fileId", "f_$i"),
+                        name = fName,
+                        displayName = obj.optString("displayName", fName),
+                        relativePath = obj.optString("relativePath", fName),
+                        size = obj.optLong("size", 0L),
+                        mimeType = obj.optString("mimeType", "*/*"),
+                        category = obj.optString("category", "Other"),
+                        lastModified = obj.optLong("lastModified", 0L),
+                        createdAt = obj.optLong("createdAt", 0L),
+                        deviceId = localDeviceId,
+                        hostDeviceId = localDeviceId,
+                        folderId = obj.optString("folderId", ""),
+                        parentFolderId = obj.optString("parentFolderId", ""),
+                        vaultId = obj.optString("vaultId", ""),
+                        isBackedUp = obj.optBoolean("isBackedUp", false),
+                        uriString = obj.optString("uriString", ""),
+                        remoteStoragePath = obj.optString("remoteStoragePath", ""),
+                        downloadUrl = obj.optString("downloadUrl", "")
+                    )
+                )
+            }
+            list
+        } catch (e: Exception) {
+            e.printStackTrace()
+            emptyList()
+        }
+    }
+
+    private fun saveCachedHostFiles(files: List<VaultFile>) {
+        repoScope.launch(Dispatchers.IO) {
+            try {
+                val cacheFile = File(context.filesDir, "cached_host_files.json")
+                val arr = JSONArray()
+                for (f in files) {
+                    val obj = JSONObject().apply {
+                        put("fileId", f.fileId)
+                        put("name", f.name)
+                        if (f.displayName.isNotBlank() && f.displayName != f.name) put("displayName", f.displayName)
+                        put("relativePath", f.relativePath)
+                        put("size", f.size)
+                        put("mimeType", f.mimeType)
+                        put("category", f.category)
+                        put("lastModified", f.lastModified)
+                        put("folderId", f.folderId.ifBlank { f.vaultId })
+                        put("vaultId", f.vaultId.ifBlank { f.folderId })
+                        if (f.isBackedUp) put("isBackedUp", true)
+                        if (f.uriString.isNotBlank()) put("uriString", f.uriString)
+                        if (f.remoteStoragePath.isNotBlank()) put("remoteStoragePath", f.remoteStoragePath)
+                        if (f.downloadUrl.isNotBlank()) put("downloadUrl", f.downloadUrl)
+                    }
+                    arr.put(obj)
+                }
+                cacheFile.writeText(arr.toString())
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     fun loadSavedSharedFolders(): List<SharedFolder> {
@@ -546,6 +633,7 @@ class BackupRepository(private val context: Context) {
 
             _hostFiles.value = allFiles
             _vaultSummary.value = overallSummary
+            saveCachedHostFiles(allFiles)
 
             val (freeBytes, totalBytes) = StorageUtils.getStorageStats()
             val updatedHost = host.copy(
