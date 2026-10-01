@@ -19,7 +19,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import com.example.models.DeviceRole
+import com.example.ui.components.AppUpdateDialog
 import com.example.ui.screens.AdminDashboardScreen
 import com.example.ui.screens.AdminHostDetailScreen
 import com.example.ui.screens.AuthScreen
@@ -30,6 +32,7 @@ import com.example.ui.screens.SplashScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.SlateDark
 import com.example.ui.viewmodels.MainViewModel
+import com.example.utils.AppUpdateManager
 
 enum class AppScreen {
     SPLASH,
@@ -89,6 +92,16 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
     val adminDownloadedFiles by viewModel.adminDownloadedFiles.collectAsState()
 
     val authState by viewModel.authUiState.collectAsState()
+
+    val context = LocalContext.current
+    val appUpdateInfo by AppUpdateManager.updateInfo.collectAsState()
+    val appUpdateProgress by AppUpdateManager.downloadProgress.collectAsState()
+    val appUpdateStatus by AppUpdateManager.statusMessage.collectAsState()
+
+    // Automatically check for updates on app launch
+    LaunchedEffect(Unit) {
+        AppUpdateManager.checkForUpdates(context, forceManualPrompt = false)
+    }
 
     LaunchedEffect(snackbarMessage) {
         snackbarMessage?.let { msg ->
@@ -277,6 +290,18 @@ fun RemoteBackupAppContent(viewModel: MainViewModel) {
                     }
                 )
             }
+        }
+
+        // Global in-app update prompt (appears over any screen when an update is found)
+        appUpdateInfo?.let { update ->
+            AppUpdateDialog(
+                updateInfo = update,
+                downloadProgress = appUpdateProgress,
+                statusMessage = appUpdateStatus,
+                onDismiss = { AppUpdateManager.dismissUpdateDialog() },
+                onDownloadAndInstall = { AppUpdateManager.downloadAndInstallUpdate(context, update) },
+                onInstallDirectly = { AppUpdateManager.installDownloadedApk(context) }
+            )
         }
     }
 }
