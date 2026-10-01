@@ -148,6 +148,7 @@ fun AdminHostDetailScreen(
     // Selected shared folder ID (null means all folders)
     var selectedSharedFolderId by remember { mutableStateOf<String?>(null) }
     var selectedTabIndex by remember { mutableIntStateOf(0) }
+    var viewMode by remember { mutableStateOf("folders") } // "folders" or "all_files"
 
     val context = LocalContext.current
     var activeFileForAction by remember { mutableStateOf<VaultFile?>(null) }
@@ -200,7 +201,8 @@ fun AdminHostDetailScreen(
                 file.folderId == folderId ||
                 file.vaultId == folderId ||
                 file.vaultId == folderPath ||
-                file.name == folderName ||
+                file.folderId == folderPath ||
+                (folderPath.isNotBlank() && file.uriString.contains(folderPath)) ||
                 (folderId.contains("default", ignoreCase = true) && (file.vaultId.isBlank() || file.vaultId.contains("default", ignoreCase = true))) ||
                 (folderName.isNotBlank() && file.relativePath.replace('\\', '/').startsWith("$folderName/", ignoreCase = true)) ||
                 (folderName.isNotBlank() && file.relativePath.contains(folderName, ignoreCase = true))
@@ -761,7 +763,103 @@ fun AdminHostDetailScreen(
                                 )
                             }
                         }
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
+                    }
+
+                    // VIEW MODE SWITCHER (Subfolders vs All Files Directly)
+                    item {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 10.dp)
+                        ) {
+                            FilterChip(
+                                selected = viewMode == "folders",
+                                onClick = { viewMode = "folders" },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(14.dp))
+                                },
+                                label = { Text("تصفح بالمجلدات", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricBlue.copy(alpha = 0.2f),
+                                    selectedLabelColor = ElectricBlue,
+                                    containerColor = SlateCard,
+                                    labelColor = TextSecondary
+                                )
+                            )
+
+                            FilterChip(
+                                selected = viewMode == "all_files",
+                                onClick = { viewMode = "all_files" },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(14.dp))
+                                },
+                                label = { Text("جميع الملفات مباشرة (${matchingFiles.size})", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ElectricBlue.copy(alpha = 0.2f),
+                                    selectedLabelColor = ElectricBlue,
+                                    containerColor = SlateCard,
+                                    labelColor = TextSecondary
+                                )
+                            )
+                        }
+                    }
+
+                    // NOTICE: If host reports files exist but cloud files list is still syncing
+                    if (files.isEmpty() && host.fileCount > 0) {
+                        item {
+                            Surface(
+                                color = AmberPending.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, AmberPending.copy(alpha = 0.4f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Sync, contentDescription = null, tint = AmberPending, modifier = Modifier.size(20.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(
+                                            text = "تم رصد ${host.fileCount} ملف في الهوست، والملفات قيد المزامنة السحابية",
+                                            color = TextPrimary,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = "اضغط على الزر أدناه لجلب الملفات من السحابة أو إرسال أمر فحص فوري لجهاز الهوست:",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = onRefreshFiles,
+                                            colors = ButtonDefaults.buttonColors(containerColor = CyanAccent),
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Icon(Icons.Default.Refresh, contentDescription = null, tint = SlateDark, modifier = Modifier.size(14.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("تحديث الملفات", color = SlateDark, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = { onSendCommand(CommandType.SCAN) },
+                                            shape = RoundedCornerShape(8.dp),
+                                            border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue)
+                                        ) {
+                                            Text("طلب فحص من الهوست", color = ElectricBlue, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     // 2. BREADCRUMBS & DIRECTORY PATH BAR (User Requirement: keep files inside their folders)
@@ -785,7 +883,7 @@ fun AdminHostDetailScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    if (currentRelativePath.isNotEmpty()) {
+                                    if (currentRelativePath.isNotEmpty() && viewMode == "folders") {
                                         IconButton(
                                             onClick = {
                                                 val slashIdx = currentRelativePath.lastIndexOf('/')
@@ -812,8 +910,15 @@ fun AdminHostDetailScreen(
                                     }
 
                                     val activeFolderName = orderedSharedFolders.firstOrNull { it.folderId == selectedSharedFolderId }?.name ?: "الرئيسي"
+                                    val pathText = if (viewMode == "all_files") {
+                                        "$activeFolderName (عرض مسطح لجميع الملفات)"
+                                    } else if (currentRelativePath.isEmpty()) {
+                                        "$activeFolderName/"
+                                    } else {
+                                        "$activeFolderName/$currentRelativePath/"
+                                    }
                                     Text(
-                                        text = if (currentRelativePath.isEmpty()) "$activeFolderName/" else "$activeFolderName/$currentRelativePath/",
+                                        text = pathText,
                                         color = TextPrimary,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = FontFamily.Monospace,
@@ -832,8 +937,8 @@ fun AdminHostDetailScreen(
                         }
                     }
 
-                    // 3. SUBDIRECTORIES INSIDE CURRENT FOLDER (NOT flattened!)
-                    if (searchQuery.isBlank() && subfolders.isNotEmpty()) {
+                    // 3. SUBDIRECTORIES INSIDE CURRENT FOLDER (when in folder mode)
+                    if (viewMode == "folders" && searchQuery.isBlank() && subfolders.isNotEmpty()) {
                         item {
                             Text(
                                 text = "المجلدات الفرعية (${subfolders.size}) - مرتبة حسب تاريخ التعديل:",
@@ -863,11 +968,49 @@ fun AdminHostDetailScreen(
                         }
                     }
 
-                    // 4. DIRECT FILES IN CURRENT FOLDER (sorted by lastModified descending)
-                    if (directFiles.isNotEmpty()) {
+                    // If in folder mode and direct files is empty but subfolders exist: Show clear helper card
+                    if (viewMode == "folders" && searchQuery.isBlank() && directFiles.isEmpty() && subfolders.isNotEmpty()) {
                         item {
+                            Surface(
+                                color = ElectricBlue.copy(alpha = 0.08f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.25f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Text(
+                                        text = "الملفات موجودة داخل المجلدات الفرعية أعلاه (${matchingFiles.size} ملف إجمالاً).",
+                                        color = TextSecondary,
+                                        fontSize = 11.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    TextButton(
+                                        onClick = { viewMode = "all_files" }
+                                    ) {
+                                        Text("عرض جميع الملفات (${matchingFiles.size}) مباشرة هنا", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. FILES LIST (Direct files or All Files mode)
+                    val filesToDisplay = if (viewMode == "all_files" || searchQuery.isNotBlank()) matchingFiles.sortedByDescending { it.lastModified } else directFiles
+
+                    if (filesToDisplay.isNotEmpty()) {
+                        item {
+                            val headerTitle = if (viewMode == "all_files") {
+                                if (searchQuery.isNotBlank()) "نتائج البحث (${filesToDisplay.size}):" else "جميع الملفات (${filesToDisplay.size}) - الأحدث أولاً:"
+                            } else {
+                                if (searchQuery.isNotBlank()) "نتائج البحث (${filesToDisplay.size}):" else "الملفات في هذا المجلد (${filesToDisplay.size}) - الأحدث أولاً:"
+                            }
                             Text(
-                                text = if (searchQuery.isNotBlank()) "نتائج البحث (${directFiles.size}):" else "الملفات في هذا المجلد (${directFiles.size}) - الأحدث أولاً:",
+                                text = headerTitle,
                                 color = TextMuted,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
@@ -875,7 +1018,7 @@ fun AdminHostDetailScreen(
                             )
                         }
 
-                        items(directFiles, key = { it.fileId }) { file ->
+                        items(filesToDisplay, key = { it.fileId }) { file ->
                             val isSelected = selectedFileIds.contains(file.fileId)
                             val isDownloaded = downloadedFileNames.contains(file.name)
                             VaultFileRowItem(
@@ -888,8 +1031,8 @@ fun AdminHostDetailScreen(
                                 modifier = Modifier.padding(bottom = 8.dp)
                             )
                         }
-                    } else if (subfolders.isEmpty()) {
-                        if (matchingFiles.isNotEmpty()) {
+                    } else if (subfolders.isEmpty() || viewMode == "all_files") {
+                        if (matchingFiles.isNotEmpty() && viewMode != "all_files") {
                             item {
                                 Text(
                                     text = "الملفات (${matchingFiles.size}):",
@@ -925,10 +1068,16 @@ fun AdminHostDetailScreen(
                                         modifier = Modifier.padding(24.dp)
                                     ) {
                                         Text(
-                                            text = "هذا المجلد لا يحتوي على أي ملفات مطابقة",
+                                            text = if (searchQuery.isNotBlank()) "لا توجد ملفات تطابق بحثك" else "هذا المجلد لا يحتوي على أي ملفات مطابقة",
                                             color = TextSecondary,
                                             fontSize = 13.sp
                                         )
+                                        if (matchingFiles.isNotEmpty() && viewMode != "all_files") {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            TextButton(onClick = { viewMode = "all_files" }) {
+                                                Text("عرض جميع ملفات المجلد (${matchingFiles.size})", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                            }
+                                        }
                                     }
                                 }
                             }

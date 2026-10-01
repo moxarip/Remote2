@@ -234,7 +234,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val host = _selectedHost.value ?: return
         viewModelScope.launch {
             _isScanning.value = true
-            FirebaseManager.fetchHostFiles(host.deviceId)
+            val files = FirebaseManager.fetchHostFiles(host.deviceId)
+            if (files.isEmpty() && host.sharedFolders.isNotEmpty()) {
+                // Try fetching each shared folder directly
+                for (sf in host.sharedFolders) {
+                    FirebaseManager.fetchFolderFiles(host.deviceId, sf.folderId)
+                }
+            }
+            _isScanning.value = false
+        }
+    }
+
+    fun refreshFolderFiles(folderId: String) {
+        val host = _selectedHost.value ?: return
+        viewModelScope.launch {
+            _isScanning.value = true
+            FirebaseManager.fetchFolderFiles(host.deviceId, folderId)
             _isScanning.value = false
         }
     }

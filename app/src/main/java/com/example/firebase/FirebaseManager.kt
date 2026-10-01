@@ -45,9 +45,10 @@ object FirebaseManager {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .writeTimeout(15, TimeUnit.SECONDS)
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -442,37 +443,7 @@ object FirebaseManager {
 
         scope.launch {
             try {
-                val filesArray = JSONArray()
-                for (f in files) {
-                    val fileObj = JSONObject().apply {
-                        put("fileId", f.fileId)
-                        put("name", f.name)
-                        put("displayName", f.displayName.ifBlank { f.name })
-                        put("relativePath", f.relativePath)
-                        put("size", f.size)
-                        put("mimeType", f.mimeType)
-                        put("category", f.category)
-                        put("lastModified", f.lastModified)
-                        put("createdAt", f.createdAt)
-                        put("deviceId", f.deviceId.ifBlank { f.hostDeviceId })
-                        put("hostDeviceId", f.hostDeviceId.ifBlank { f.deviceId })
-                        put("folderId", f.folderId.ifBlank { f.vaultId })
-                        put("parentFolderId", f.parentFolderId)
-                        put("vaultId", f.vaultId.ifBlank { f.folderId })
-                        put("isBackedUp", f.isBackedUp)
-                        put("uriString", f.uriString)
-                        put("remoteStoragePath", f.remoteStoragePath)
-                        put("downloadUrl", f.downloadUrl)
-                    }
-                    filesArray.put(fileObj)
-                }
-
-                val putFilesReq = Request.Builder()
-                    .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
-                    .put(filesArray.toString().toRequestBody(jsonMediaType))
-                    .build()
-                httpClient.newCall(putFilesReq).execute()
-
+                // 1. Immediately patch high-level summary so Admin sees real device numbers
                 val patchDev = JSONObject().apply {
                     put("fileCount", summary.filesFound)
                     put("folderCount", summary.foldersFound)
@@ -485,34 +456,105 @@ object FirebaseManager {
                     .patch(patchDev.toString().toRequestBody(jsonMediaType))
                     .build()
                 httpClient.newCall(patchReq).execute()
+
+                // Helper to create compact JSON for each file
+                fun fileToJson(f: VaultFile): JSONObject = JSONObject().apply {
+                    put("fileId", f.fileId)
+                    put("name", f.name)
+                    if (f.displayName.isNotBlank() && f.displayName != f.name) put("displayName", f.displayName)
+                    put("relativePath", f.relativePath)
+                    put("size", f.size)
+                    put("mimeType", f.mimeType)
+                    put("category", f.category)
+                    put("lastModified", f.lastModified)
+                    put("folderId", f.folderId.ifBlank { f.vaultId })
+                    put("vaultId", f.vaultId.ifBlank { f.folderId })
+                    if (f.isBackedUp) put("isBackedUp", true)
+                    if (f.uriString.isNotBlank()) put("uriString", f.uriString)
+                    if (f.remoteStoragePath.isNotBlank()) put("remoteStoragePath", f.remoteStoragePath)
+                    if (f.downloadUrl.isNotBlank()) put("downloadUrl", f.downloadUrl)
+                }
+
+                // 2. Chunked upload to /devices/$deviceId/files.json
+                // We upload in batches of 250 files using PUT for first batch and PATCH for rest.
+                // Firebase RTDB automatically merges integer keys into a JSON array without socket timeout.
+                val batchSize = 250
+                if (files.isEmpty()) {
+                    val emptyReq = Request.Builder()
+                        .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
+                        .put("[]".toRequestBody(jsonMediaType))
+                        .build()
+                    httpClient.newCall(emptyReq).execute()
+                } else {
+                    for (startIndex in 0 until files.size step batchSize) {
+                        val endIndex = minOf(startIndex + batchSize, files.size)
+                        val batchObj = JSONObject()
+                        for (i in startIndex until endIndex) {
+                            batchObj.put(i.toString(), fileToJson(files[i]))
+                        }
+                        val req = Request.Builder()
+                            .url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json")
+                            .patch(batchObj.toString().toRequestBody(jsonMediaType))
+                            .build()
+                        try {
+                            httpClient.newCall(req).execute()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Retrying batch $startIndex..$endIndex: ${e.message}")
+                            // One retry on transient failure
+                            try { httpClient.newCall(req).execute() } catch (ex: Exception) { Log.e(TAG, "Batch failed: ${ex.message}") }
+                        }
+                    }
+                }
+
+                // 3. Also upload per-folder files index for instant folder browsing: /devices/$deviceId/folders/$folderId/files.json
+                val filesByFolder = files.groupBy { it.folderId.ifBlank { it.vaultId } }
+                for ((folderId, folderFiles) in filesByFolder) {
+                    if (folderId.isBlank()) continue
+                    for (startIndex in 0 until folderFiles.size step batchSize) {
+                        val endIndex = minOf(startIndex + batchSize, folderFiles.size)
+                        val batchObj = JSONObject()
+                        for (i in startIndex until endIndex) {
+                            batchObj.put(i.toString(), fileToJson(folderFiles[i]))
+                        }
+                        val req = Request.Builder()
+                            .url("$DEFAULT_DATABASE_URL/devices/$deviceId/folders/$folderId/files.json")
+                            .patch(batchObj.toString().toRequestBody(jsonMediaType))
+                            .build()
+                        try {
+                            httpClient.newCall(req).execute()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Folder batch failed for $folderId: ${e.message}")
+                        }
+                    }
+                }
+                Log.d(TAG, "Successfully uploaded vault metadata for $deviceId (${files.size} files)")
             } catch (e: Exception) {
                 Log.e(TAG, "Error uploading vault metadata: ${e.message}")
             }
         }
     }
 
-    suspend fun fetchHostFiles(deviceId: String): List<VaultFile> = withContext(Dispatchers.IO) {
+    suspend fun fetchFolderFiles(deviceId: String, folderId: String): List<VaultFile> = withContext(Dispatchers.IO) {
+        if (folderId.isBlank()) return@withContext emptyList()
         try {
-            val req = Request.Builder().url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json").get().build()
+            val req = Request.Builder().url("$DEFAULT_DATABASE_URL/devices/$deviceId/folders/$folderId/files.json").get().build()
             val resp = httpClient.newCall(req).execute()
             if (!resp.isSuccessful) return@withContext emptyList()
-
             val body = resp.body?.string()?.trim() ?: "null"
             if (body == "null" || body.isEmpty() || body == "[]" || body == "{}") return@withContext emptyList()
 
             val list = mutableListOf<VaultFile>()
-
             fun parseJsonObj(obj: JSONObject, idx: Int): VaultFile {
                 val fName = obj.optString("name", "file")
                 val dName = obj.optString("displayName", fName)
                 val devId = obj.optString("deviceId", obj.optString("hostDeviceId", deviceId))
-                val fldId = obj.optString("folderId", obj.optString("vaultId", ""))
+                val fldId = obj.optString("folderId", obj.optString("vaultId", folderId))
                 val pFldId = obj.optString("parentFolderId", "")
                 return VaultFile(
-                    fileId = obj.optString("fileId", "f_$idx"),
+                    fileId = obj.optString("fileId", "f_${folderId}_$idx"),
                     name = fName,
                     displayName = dName,
-                    relativePath = obj.optString("relativePath", ""),
+                    relativePath = obj.optString("relativePath", fName),
                     size = obj.optLong("size", 0L),
                     mimeType = obj.optString("mimeType", "*/*"),
                     category = obj.optString("category", "Other"),
@@ -544,6 +586,114 @@ object FirebaseManager {
                     val k = keys.next()
                     val obj = jsonMap.optJSONObject(k) ?: continue
                     list.add(parseJsonObj(obj, idx++))
+                }
+            }
+
+            if (list.isNotEmpty()) {
+                val currentMap = _syncedFiles.value.toMutableMap()
+                val existing = (currentMap[deviceId] ?: emptyList()).toMutableList()
+                val existingIds = existing.map { it.fileId }.toSet()
+                for (f in list) {
+                    if (f.fileId !in existingIds) existing.add(f)
+                }
+                currentMap[deviceId] = existing
+                _syncedFiles.value = currentMap
+            }
+            list
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching folder files: ${e.message}")
+            emptyList()
+        }
+    }
+
+    suspend fun fetchHostFiles(deviceId: String): List<VaultFile> = withContext(Dispatchers.IO) {
+        try {
+            val req = Request.Builder().url("$DEFAULT_DATABASE_URL/devices/$deviceId/files.json").get().build()
+            val resp = httpClient.newCall(req).execute()
+            if (!resp.isSuccessful) return@withContext emptyList()
+
+            val body = resp.body?.string()?.trim() ?: "null"
+            val list = mutableListOf<VaultFile>()
+
+            fun parseJsonObj(obj: JSONObject, idx: Int): VaultFile {
+                val fName = obj.optString("name", "file")
+                val dName = obj.optString("displayName", fName)
+                val devId = obj.optString("deviceId", obj.optString("hostDeviceId", deviceId))
+                val fldId = obj.optString("folderId", obj.optString("vaultId", ""))
+                val pFldId = obj.optString("parentFolderId", "")
+                return VaultFile(
+                    fileId = obj.optString("fileId", "f_$idx"),
+                    name = fName,
+                    displayName = dName,
+                    relativePath = obj.optString("relativePath", fName),
+                    size = obj.optLong("size", 0L),
+                    mimeType = obj.optString("mimeType", "*/*"),
+                    category = obj.optString("category", "Other"),
+                    lastModified = obj.optLong("lastModified", 0L),
+                    createdAt = obj.optLong("createdAt", 0L),
+                    deviceId = devId,
+                    hostDeviceId = devId,
+                    folderId = fldId,
+                    parentFolderId = pFldId,
+                    vaultId = fldId,
+                    isBackedUp = obj.optBoolean("isBackedUp", false),
+                    uriString = obj.optString("uriString", ""),
+                    remoteStoragePath = obj.optString("remoteStoragePath", ""),
+                    downloadUrl = obj.optString("downloadUrl", "")
+                )
+            }
+
+            if (body != "null" && body.isNotEmpty() && body != "[]" && body != "{}") {
+                if (body.startsWith("[")) {
+                    val array = JSONArray(body)
+                    for (i in 0 until array.length()) {
+                        val obj = array.optJSONObject(i) ?: continue
+                        list.add(parseJsonObj(obj, i))
+                    }
+                } else if (body.startsWith("{")) {
+                    val jsonMap = JSONObject(body)
+                    val keys = jsonMap.keys()
+                    var idx = 0
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        val obj = jsonMap.optJSONObject(k) ?: continue
+                        list.add(parseJsonObj(obj, idx++))
+                    }
+                }
+            }
+
+            // Fallback: If /files.json was null or empty, try reading from /devices/$deviceId/folders.json
+            if (list.isEmpty()) {
+                try {
+                    val foldersReq = Request.Builder().url("$DEFAULT_DATABASE_URL/devices/$deviceId/folders.json").get().build()
+                    val foldersResp = httpClient.newCall(foldersReq).execute()
+                    if (foldersResp.isSuccessful) {
+                        val fBody = foldersResp.body?.string()?.trim() ?: "null"
+                        if (fBody != "null" && fBody.startsWith("{")) {
+                            val foldersMap = JSONObject(fBody)
+                            val fKeys = foldersMap.keys()
+                            while (fKeys.hasNext()) {
+                                val fId = fKeys.next()
+                                val fObj = foldersMap.optJSONObject(fId) ?: continue
+                                val filesPart = fObj.opt("files")
+                                if (filesPart is JSONArray) {
+                                    for (j in 0 until filesPart.length()) {
+                                        val obj = filesPart.optJSONObject(j) ?: continue
+                                        list.add(parseJsonObj(obj, list.size))
+                                    }
+                                } else if (filesPart is JSONObject) {
+                                    val partKeys = filesPart.keys()
+                                    while (partKeys.hasNext()) {
+                                        val pk = partKeys.next()
+                                        val obj = filesPart.optJSONObject(pk) ?: continue
+                                        list.add(parseJsonObj(obj, list.size))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Folders fallback check failed: ${e.message}")
                 }
             }
 

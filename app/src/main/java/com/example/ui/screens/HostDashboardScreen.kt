@@ -36,6 +36,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Sync
@@ -48,9 +49,13 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -685,9 +690,18 @@ fun HostDashboardScreen(
             it.vaultId == currentFolder.folderId ||
             it.folderId == currentFolder.folderId ||
             it.vaultId == currentFolder.pathOrUri ||
+            it.folderId == currentFolder.pathOrUri ||
+            (currentFolder.pathOrUri.isNotBlank() && it.uriString.contains(currentFolder.pathOrUri)) ||
+            (currentFolder.name.isNotBlank() && it.relativePath.replace('\\', '/').startsWith("${currentFolder.name}/", ignoreCase = true)) ||
+            (currentFolder.name.isNotBlank() && it.relativePath.contains(currentFolder.name, ignoreCase = true)) ||
             (currentFolder.folderId == "folder_default" && (it.vaultId.isBlank() || it.vaultId == "folder_default"))
         }.ifEmpty {
-            if (sharedFolders.size <= 1) hostFiles else emptyList()
+            if (sharedFolders.size <= 1) hostFiles else {
+                val fallback = hostFiles.filter {
+                    (currentFolder.name.isNotBlank() && it.relativePath.contains(currentFolder.name, ignoreCase = true))
+                }
+                if (fallback.isNotEmpty()) fallback else hostFiles
+            }
         }
         HostFolderExplorerDialog(
             folder = currentFolder,
@@ -781,8 +795,20 @@ fun HostFolderExplorerDialog(
 ) {
     var currentSubPath by remember { mutableStateOf("") }
     var selectedFileIds by remember { mutableStateOf(setOf<String>()) }
+    var viewMode by remember { mutableStateOf("folders") } // "folders" or "all_files"
+    var searchQuery by remember { mutableStateOf("") }
+
     val (subfolders, directFiles) = remember(files, currentSubPath) {
         StorageUtils.getItemsForPath(files, currentSubPath)
+    }
+
+    val displayFiles = remember(files, searchQuery, viewMode, directFiles) {
+        if (viewMode == "all_files" || searchQuery.isNotBlank()) {
+            if (searchQuery.isBlank()) files.sortedByDescending { it.lastModified }
+            else files.filter { it.name.contains(searchQuery, ignoreCase = true) || it.relativePath.contains(searchQuery, ignoreCase = true) }.sortedByDescending { it.lastModified }
+        } else {
+            directFiles
+        }
     }
 
     AlertDialog(
@@ -796,21 +822,84 @@ fun HostFolderExplorerDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = folder.name,
-                        color = TextPrimary,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 16.sp,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = folder.name,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            maxLines = 1
+                        )
+                        Text(
+                            text = "${files.size} ملفات متوفرة في هذا المجلد",
+                            color = CyanAccent,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                     IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
                         Icon(Icons.Default.Close, contentDescription = "Close", tint = TextMuted)
                     }
                 }
 
-                // Breadcrumb path & Back
-                if (currentSubPath.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // View Mode Switcher
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    FilterChip(
+                        selected = viewMode == "folders",
+                        onClick = { viewMode = "folders" },
+                        leadingIcon = {
+                            Icon(Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(14.dp))
+                        },
+                        label = { Text("تصفح بالمجلدات", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = ElectricBlue.copy(alpha = 0.2f),
+                            selectedLabelColor = ElectricBlue,
+                            containerColor = SlateCardElevated,
+                            labelColor = TextSecondary
+                        )
+                    )
+
+                    FilterChip(
+                        selected = viewMode == "all_files",
+                        onClick = { viewMode = "all_files" },
+                        leadingIcon = {
+                            Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(14.dp))
+                        },
+                        label = { Text("جميع الملفات (${files.size})", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = ElectricBlue.copy(alpha = 0.2f),
+                            selectedLabelColor = ElectricBlue,
+                            containerColor = SlateCardElevated,
+                            labelColor = TextSecondary
+                        )
+                    )
+                }
+
+                // Search Bar
+                Spacer(modifier = Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("بحث عن اسم الملف...", fontSize = 11.sp, color = TextMuted) },
+                    leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = TextSecondary, modifier = Modifier.size(16.dp)) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = ElectricBlue,
+                        unfocusedBorderColor = SlateBorder,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().height(46.dp)
+                )
+
+                // Breadcrumb path & Back (only in folder mode when inside a subfolder)
+                if (viewMode == "folders" && currentSubPath.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(6.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -843,11 +932,11 @@ fun HostFolderExplorerDialog(
                     .fillMaxWidth()
                     .height(350.dp)
             ) {
-                // Subdirectories (folders)
-                if (subfolders.isNotEmpty()) {
+                // If in folder mode: Show Subdirectories first
+                if (viewMode == "folders" && searchQuery.isBlank() && subfolders.isNotEmpty()) {
                     item {
                         Text(
-                            text = "المجلدات الفرعية (${subfolders.size})",
+                            text = "المجلدات الفرعية (${subfolders.size}):",
                             color = TextMuted,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -870,7 +959,7 @@ fun HostFolderExplorerDialog(
                                 modifier = Modifier.padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Folder, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Default.Folder, contentDescription = null, tint = CyanAccent, modifier = Modifier.size(20.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(sub.name, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -886,84 +975,56 @@ fun HostFolderExplorerDialog(
                     }
                 }
 
-                // Direct files in this directory (sorted by lastModified descending)
-                item {
-                    Text(
-                        text = "الملفات (${directFiles.size})",
-                        color = TextMuted,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
-                    )
-                }
-
-                if (directFiles.isEmpty() && subfolders.isEmpty()) {
-                    if (files.isNotEmpty()) {
-                        items(files) { f ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                // If in folder mode and direct files is empty but subfolders exist: Show clear helper card
+                if (viewMode == "folders" && searchQuery.isBlank() && directFiles.isEmpty() && subfolders.isNotEmpty()) {
+                    item {
+                        Surface(
+                            color = ElectricBlue.copy(alpha = 0.08f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, ElectricBlue.copy(alpha = 0.25f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Checkbox(
-                                    checked = selectedFileIds.contains(f.fileId),
-                                    onCheckedChange = { isChecked ->
-                                        selectedFileIds = if (isChecked) {
-                                            selectedFileIds + f.fileId
-                                        } else {
-                                            selectedFileIds - f.fileId
-                                        }
-                                    },
-                                    colors = CheckboxDefaults.colors(checkedColor = ElectricBlue),
-                                    modifier = Modifier.size(24.dp)
+                                Text(
+                                    text = "الملفات موجودة داخل المجلدات الفرعية أعلاه (${files.size} ملف إجمالاً).",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                FileCategoryIcon(category = f.category, modifier = Modifier.size(26.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(f.name, color = TextPrimary, fontSize = 12.sp, maxLines = 1)
-                                    Text(
-                                        "${StorageUtils.formatFileSize(f.size)} • ${StorageUtils.formatDate(f.lastModified)}",
-                                        color = TextMuted,
-                                        fontSize = 10.sp
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(4.dp))
-                                if (f.isBackedUp) {
-                                    Surface(
-                                        color = EmeraldOnline.copy(alpha = 0.15f),
-                                        shape = RoundedCornerShape(6.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Icon(
-                                                Icons.Default.CheckCircle,
-                                                contentDescription = null,
-                                                tint = EmeraldOnline,
-                                                modifier = Modifier.size(10.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(3.dp))
-                                            Text("مرفوع", color = EmeraldOnline, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-                                        }
-                                    }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                TextButton(
+                                    onClick = { viewMode = "all_files" }
+                                ) {
+                                    Text("عرض جميع الملفات (${files.size}) مباشرة هنا", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                 }
                             }
                         }
-                    } else {
-                        item {
-                            Text(
-                                text = "هذا المجلد فارغ",
-                                color = TextSecondary,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(vertical = 16.dp)
-                            )
-                        }
                     }
+                }
+
+                // Header for files
+                val filesTitle = if (viewMode == "all_files") {
+                    if (searchQuery.isNotBlank()) "نتائج البحث (${displayFiles.size}):" else "جميع الملفات (${displayFiles.size}) - الأحدث أولاً:"
                 } else {
-                    items(directFiles) { f ->
+                    if (searchQuery.isNotBlank()) "نتائج البحث (${displayFiles.size}):" else "الملفات في هذا المجلد (${displayFiles.size}):"
+                }
+
+                if (displayFiles.isNotEmpty()) {
+                    item {
+                        Text(
+                            text = filesTitle,
+                            color = TextMuted,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(top = 8.dp, bottom = 6.dp)
+                        )
+                    }
+
+                    items(displayFiles) { f ->
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -987,11 +1048,12 @@ fun HostFolderExplorerDialog(
                             Spacer(modifier = Modifier.width(8.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(f.name, color = TextPrimary, fontSize = 12.sp, maxLines = 1)
-                                Text(
-                                    "${StorageUtils.formatFileSize(f.size)} • ${StorageUtils.formatDate(f.lastModified)}",
-                                    color = TextMuted,
-                                    fontSize = 10.sp
-                                )
+                                val subtitle = if (viewMode == "all_files" && f.relativePath.contains('/')) {
+                                    "${f.relativePath.substringBeforeLast('/')} • ${StorageUtils.formatFileSize(f.size)}"
+                                } else {
+                                    "${StorageUtils.formatFileSize(f.size)} • ${StorageUtils.formatDate(f.lastModified)}"
+                                }
+                                Text(subtitle, color = TextMuted, fontSize = 10.sp, maxLines = 1)
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             if (f.isBackedUp) {
@@ -1030,6 +1092,34 @@ fun HostFolderExplorerDialog(
                             }
                         }
                     }
+                } else if (subfolders.isEmpty() || viewMode == "all_files") {
+                    item {
+                        Surface(
+                            color = SlateCardElevated,
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, SlateBorder),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(20.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = if (searchQuery.isNotBlank()) "لا توجد ملفات تطابق بحثك" else "لا توجد ملفات في هذا المسار",
+                                    color = TextSecondary,
+                                    fontSize = 12.sp
+                                )
+                                if (viewMode != "all_files" && files.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    TextButton(onClick = { viewMode = "all_files" }) {
+                                        Text("عرض جميع ملفات المجلد (${files.size})", color = CyanAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -1037,7 +1127,7 @@ fun HostFolderExplorerDialog(
             if (selectedFileIds.isNotEmpty()) {
                 Button(
                     onClick = {
-                        val toUpload = directFiles.filter { it.fileId in selectedFileIds }
+                        val toUpload = files.filter { it.fileId in selectedFileIds }
                         onUploadFiles(toUpload)
                         selectedFileIds = emptySet()
                     },
