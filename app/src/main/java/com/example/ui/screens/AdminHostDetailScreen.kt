@@ -200,6 +200,7 @@ fun AdminHostDetailScreen(
                 file.folderId == folderId ||
                 file.vaultId == folderId ||
                 file.vaultId == folderPath ||
+                file.name == folderName ||
                 (folderId.contains("default", ignoreCase = true) && (file.vaultId.isBlank() || file.vaultId.contains("default", ignoreCase = true))) ||
                 (folderName.isNotBlank() && file.relativePath.replace('\\', '/').startsWith("$folderName/", ignoreCase = true)) ||
                 (folderName.isNotBlank() && file.relativePath.contains(folderName, ignoreCase = true))

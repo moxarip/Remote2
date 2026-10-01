@@ -9,6 +9,8 @@ import android.util.Log
 import android.os.Build
 import android.os.Environment
 import android.os.StatFs
+import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -245,6 +247,96 @@ object StorageUtils {
         return Pair(fileList, summary)
     }
 
+    fun querySingleContentUri(
+        context: Context,
+        uri: Uri,
+        hostDeviceId: String,
+        vaultId: String
+    ): VaultFile? {
+        try {
+            var displayName: String? = null
+            var size: Long = 0L
+            var lastModified: Long = System.currentTimeMillis()
+
+            // 1. Try querying via ContentResolver using OpenableColumns
+            try {
+                context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex != -1 && !cursor.isNull(nameIndex)) {
+                            displayName = cursor.getString(nameIndex)
+                        }
+                        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                        if (sizeIndex != -1 && !cursor.isNull(sizeIndex)) {
+                            size = cursor.getLong(sizeIndex)
+                        }
+                        val modIndex = cursor.getColumnIndex("last_modified")
+                        if (modIndex != -1 && !cursor.isNull(modIndex)) {
+                            lastModified = cursor.getLong(modIndex)
+                        } else {
+                            val dateModIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
+                            if (dateModIndex != -1 && !cursor.isNull(dateModIndex)) {
+                                val s = cursor.getLong(dateModIndex)
+                                lastModified = if (s < 10000000000L) s * 1000L else s
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("StorageUtils", "Could not query cursor for single URI $uri: ${e.message}")
+            }
+
+            // 2. Try openFileDescriptor for real file length if size is still 0
+            if (size <= 0L) {
+                try {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        if (pfd.statSize > 0) size = pfd.statSize
+                    }
+                } catch (e: Exception) { }
+            }
+
+            // 3. Fallback name from DocumentFile or Uri path
+            if (displayName.isNullOrBlank()) {
+                val doc = try { DocumentFile.fromSingleUri(context, uri) } catch (e: Exception) { null }
+                displayName = doc?.name
+            }
+            if (displayName.isNullOrBlank()) {
+                val lastSeg = uri.lastPathSegment
+                displayName = if (!lastSeg.isNullOrBlank()) {
+                    Uri.decode(lastSeg).substringAfterLast('/')
+                } else {
+                    "selected_file"
+                }
+            }
+
+            val finalName = displayName ?: "selected_file"
+            val mime = context.contentResolver.getType(uri) ?: getMimeTypeFromExtension(finalName)
+            val cat = getCategoryForFile(finalName, mime)
+
+            return VaultFile(
+                fileId = "file_${UUID.nameUUIDFromBytes("${vaultId}_$finalName".toByteArray())}",
+                name = finalName,
+                displayName = finalName,
+                relativePath = finalName,
+                size = if (size > 0L) size else 0L,
+                mimeType = mime,
+                lastModified = lastModified,
+                createdAt = System.currentTimeMillis(),
+                deviceId = hostDeviceId,
+                hostDeviceId = hostDeviceId,
+                folderId = vaultId,
+                parentFolderId = vaultId,
+                vaultId = vaultId,
+                category = cat,
+                isBackedUp = false,
+                uriString = uri.toString()
+            )
+        } catch (e: Exception) {
+            Log.e("StorageUtils", "Failed to resolve single content URI $uri: ${e.message}")
+            return null
+        }
+    }
+
     fun scanDocumentTree(
         context: Context,
         treeUri: Uri,
@@ -252,56 +344,56 @@ object StorageUtils {
         vaultId: String,
         onProgress: ((count: Int, lastFile: String) -> Unit)? = null
     ): Pair<List<VaultFile>, VaultSummary> {
+        val uriStr = treeUri.toString()
+
+        // If it's a single file (no "/tree/"), resolve directly using querySingleContentUri!
+        if (!uriStr.contains("/tree/")) {
+            val single = querySingleContentUri(context, treeUri, hostDeviceId, vaultId)
+            if (single != null) {
+                return Pair(
+                    listOf(single),
+                    VaultSummary(
+                        filesFound = 1,
+                        foldersFound = 0,
+                        totalSizeBytes = single.size,
+                        lastScanTime = System.currentTimeMillis(),
+                        vaultPath = uriStr
+                    )
+                )
+            }
+        }
+
         val rootDoc = try {
-            if (treeUri.toString().contains("/tree/")) {
+            if (uriStr.contains("/tree/")) {
                 DocumentFile.fromTreeUri(context, treeUri)
             } else {
                 DocumentFile.fromSingleUri(context, treeUri) ?: DocumentFile.fromTreeUri(context, treeUri)
             }
         } catch (e: Exception) {
             try { DocumentFile.fromSingleUri(context, treeUri) } catch (ex: Exception) { null }
-        } ?: return Pair(emptyList(), VaultSummary())
+        }
+
+        // If DocumentFile is null or is a single file, resolve via querySingleContentUri
+        if (rootDoc == null || rootDoc.isFile) {
+            val single = querySingleContentUri(context, treeUri, hostDeviceId, vaultId)
+            if (single != null) {
+                return Pair(
+                    listOf(single),
+                    VaultSummary(
+                        filesFound = 1,
+                        foldersFound = 0,
+                        totalSizeBytes = single.size,
+                        lastScanTime = System.currentTimeMillis(),
+                        vaultPath = uriStr
+                    )
+                )
+            }
+            if (rootDoc == null) return Pair(emptyList(), VaultSummary())
+        }
 
         val fileList = mutableListOf<VaultFile>()
         var folderCount = 0
         var totalSize = 0L
-
-        if (rootDoc.isFile) {
-            val name = rootDoc.name ?: "selected_file"
-            val mime = rootDoc.type ?: getMimeTypeFromExtension(name)
-            val cat = getCategoryForFile(name, mime)
-            val size = rootDoc.length()
-            fileList.add(
-                VaultFile(
-                    fileId = "file_${UUID.nameUUIDFromBytes("${vaultId}_$name".toByteArray())}",
-                    name = name,
-                    displayName = name,
-                    relativePath = name,
-                    size = size,
-                    mimeType = mime,
-                    lastModified = rootDoc.lastModified(),
-                    createdAt = System.currentTimeMillis(),
-                    deviceId = hostDeviceId,
-                    hostDeviceId = hostDeviceId,
-                    folderId = vaultId,
-                    parentFolderId = vaultId,
-                    vaultId = vaultId,
-                    category = cat,
-                    isBackedUp = false,
-                    uriString = rootDoc.uri.toString()
-                )
-            )
-            return Pair(
-                fileList,
-                VaultSummary(
-                    filesFound = 1,
-                    foldersFound = 0,
-                    totalSizeBytes = size,
-                    lastScanTime = System.currentTimeMillis(),
-                    vaultPath = treeUri.toString()
-                )
-            )
-        }
 
         fun scanDocRecursive(dir: DocumentFile, relativeParent: String) {
             val children = try {
@@ -316,21 +408,26 @@ object StorageUtils {
 
             for (item in children) {
                 try {
+                    val itemName = item.name ?: continue
+                    if (itemName == ".nomedia" || itemName == ".thumbnails") continue
+
                     if (item.isDirectory) {
                         folderCount++
-                        val dirName = item.name ?: "folder"
-                        val nextParent = if (relativeParent.isEmpty()) dirName else "$relativeParent/$dirName"
-                        // Android security check: if it cannot be read (like Android/data or Android/obb), handle gracefully
-                        val isReadable = try { item.canRead() } catch (e: Exception) { false }
-                        if (isReadable) {
-                            scanDocRecursive(item, nextParent)
-                        } else {
-                            Log.w("StorageUtils", "Directory is protected/inaccessible: $nextParent")
+                        val nextParent = if (relativeParent.isEmpty()) itemName else "$relativeParent/$itemName"
+
+                        // System restricted directories check (Android/data or Android/obb)
+                        val isSystemProtected = nextParent.equals("Android/data", ignoreCase = true) ||
+                                nextParent.equals("Android/obb", ignoreCase = true) ||
+                                nextParent.endsWith("/Android/data", ignoreCase = true) ||
+                                nextParent.endsWith("/Android/obb", ignoreCase = true)
+
+                        if (isSystemProtected) {
+                            Log.w("StorageUtils", "Directory is system protected: $nextParent")
                             fileList.add(
                                 VaultFile(
                                     fileId = "protected_${UUID.nameUUIDFromBytes("${vaultId}_$nextParent".toByteArray())}",
                                     name = ".protected",
-                                    displayName = dirName,
+                                    displayName = itemName,
                                     relativePath = "$nextParent/.protected",
                                     size = 0L,
                                     mimeType = "inode/directory-protected",
@@ -346,12 +443,14 @@ object StorageUtils {
                                     uriString = item.uri.toString()
                                 )
                             )
+                        } else {
+                            // Recursively scan all subdirectories without broken item.canRead() check!
+                            scanDocRecursive(item, nextParent)
                         }
                     } else {
-                        val name = item.name ?: "unnamed_file"
-                        val relPath = if (relativeParent.isEmpty()) name else "$relativeParent/$name"
-                        val mime = item.type ?: getMimeTypeFromExtension(name)
-                        val cat = getCategoryForFile(name, mime)
+                        val relPath = if (relativeParent.isEmpty()) itemName else "$relativeParent/$itemName"
+                        val mime = item.type ?: getMimeTypeFromExtension(itemName)
+                        val cat = getCategoryForFile(itemName, mime)
                         val size = item.length()
                         totalSize += size
                         val parentFolderId = if (relativeParent.isEmpty()) vaultId else "${vaultId}_${relativeParent.replace('/', '_')}"
@@ -359,8 +458,8 @@ object StorageUtils {
                         fileList.add(
                             VaultFile(
                                 fileId = "file_${UUID.nameUUIDFromBytes("${vaultId}_$relPath".toByteArray())}",
-                                name = name,
-                                displayName = name,
+                                name = itemName,
+                                displayName = itemName,
                                 relativePath = relPath,
                                 size = size,
                                 mimeType = mime,
@@ -377,7 +476,7 @@ object StorageUtils {
                             )
                         )
                         if (fileList.size % 25 == 0) {
-                            onProgress?.invoke(fileList.size, name)
+                            onProgress?.invoke(fileList.size, itemName)
                         }
                     }
                 } catch (e: Exception) {
@@ -389,7 +488,7 @@ object StorageUtils {
         scanDocRecursive(rootDoc, "")
 
         val summary = VaultSummary(
-            filesFound = fileList.size,
+            filesFound = fileList.filter { it.name != ".protected" }.size,
             foldersFound = folderCount,
             totalSizeBytes = totalSize,
             lastScanTime = System.currentTimeMillis(),
@@ -436,17 +535,36 @@ object StorageUtils {
 
         if (clean.startsWith("content://")) {
             val uri = Uri.parse(clean)
+
+            // If it's a single file (not a tree), resolve directly!
+            if (!clean.contains("/tree/")) {
+                val singleFile = querySingleContentUri(context, uri, hostDeviceId, vaultId)
+                if (singleFile != null) {
+                    return Pair(
+                        listOf(singleFile),
+                        VaultSummary(
+                            filesFound = 1,
+                            foldersFound = 0,
+                            totalSizeBytes = singleFile.size,
+                            lastScanTime = System.currentTimeMillis(),
+                            vaultPath = clean
+                        )
+                    )
+                }
+            }
+
             // 1. Scan via SAF DocumentFile first (returns real content:// SAF URIs for every file)
             val docResult = scanDocumentTree(context, uri, hostDeviceId, vaultId, onProgress)
-            if (docResult.first.isNotEmpty()) {
+            val realDocFiles = docResult.first.filter { it.name != ".protected" && it.category != "Protected" }
+            if (realDocFiles.isNotEmpty()) {
                 return docResult
             }
 
-            // 2. If SAF returned 0 (e.g. test environment or local path translation), try real filesystem path
+            // 2. If SAF returned 0 real files, try real filesystem path (e.g. /storage/emulated/0/...)
             val realPath = resolvePathFromTreeUri(uri)
             if (realPath != null) {
                 val realDir = File(realPath)
-                if (realDir.exists() && realDir.canRead()) {
+                if (realDir.exists()) {
                     val result = scanFolder(realDir, hostDeviceId, vaultId, onProgress)
                     if (result.first.isNotEmpty()) {
                         return result
@@ -454,12 +572,19 @@ object StorageUtils {
                 }
             }
 
-            if (realPath != null) {
-                val realDir = File(realPath)
-                if (realDir.exists()) {
-                    val result = scanFolder(realDir, hostDeviceId, vaultId, onProgress)
-                    if (result.first.isNotEmpty()) return result
-                }
+            // 3. Fallback: if single file query works on this URI
+            val fallbackSingle = querySingleContentUri(context, uri, hostDeviceId, vaultId)
+            if (fallbackSingle != null) {
+                return Pair(
+                    listOf(fallbackSingle),
+                    VaultSummary(
+                        filesFound = 1,
+                        foldersFound = 0,
+                        totalSizeBytes = fallbackSingle.size,
+                        lastScanTime = System.currentTimeMillis(),
+                        vaultPath = clean
+                    )
+                )
             }
 
             return docResult
@@ -597,6 +722,26 @@ object StorageUtils {
         if (clean.startsWith("content://")) {
             try {
                 val uri = Uri.parse(clean)
+                // If single file, get file display name directly from ContentResolver
+                if (!clean.contains("/tree/")) {
+                    try {
+                        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                if (idx != -1) {
+                                    val name = cursor.getString(idx)
+                                    if (!name.isNullOrBlank()) return name
+                                }
+                            }
+                        }
+                    } catch (e: Exception) { }
+                    val lastSeg = uri.lastPathSegment
+                    if (!lastSeg.isNullOrBlank()) {
+                        return Uri.decode(lastSeg).substringAfterLast('/')
+                    }
+                    return "ملف منفرد"
+                }
+
                 val uriStr = Uri.decode(clean)
                 if (uriStr.contains("primary:Android/media", ignoreCase = true) ||
                     uriStr.contains("primary%3AAndroid%2Fmedia", ignoreCase = true) ||
@@ -671,7 +816,7 @@ object StorageUtils {
             }
         }
 
-        // If subfolder navigation resulted in empty because of path mismatch, fallback to direct files matching prefix
+        // Fallback 1: If subfolder navigation resulted in empty because of path mismatch, fallback to direct files matching prefix
         if (cleanCurrent.isNotEmpty() && subfoldersMap.isEmpty() && directFiles.isEmpty()) {
             for (file in allFiles) {
                 val rel = file.relativePath.replace('\\', '/').trim().trim('/')
@@ -679,6 +824,11 @@ object StorageUtils {
                     directFiles.add(file)
                 }
             }
+        }
+
+        // Fallback 2: If root navigation yielded no subfolders and no direct files, but allFiles has files, show all files directly
+        if (cleanCurrent.isEmpty() && subfoldersMap.isEmpty() && directFiles.isEmpty() && allFiles.isNotEmpty()) {
+            directFiles.addAll(allFiles)
         }
 
         val folderItems = subfoldersMap.map { (subDirName, filesInFolder) ->

@@ -681,7 +681,14 @@ fun HostDashboardScreen(
     // BROWSE FOLDER HIERARCHY DIALOG FOR HOST
     if (folderToBrowse != null) {
         val currentFolder = folderToBrowse!!
-        val folderFiles = hostFiles.filter { it.vaultId == currentFolder.folderId }
+        val folderFiles = hostFiles.filter {
+            it.vaultId == currentFolder.folderId ||
+            it.folderId == currentFolder.folderId ||
+            it.vaultId == currentFolder.pathOrUri ||
+            (currentFolder.folderId == "folder_default" && (it.vaultId.isBlank() || it.vaultId == "folder_default"))
+        }.ifEmpty {
+            if (sharedFolders.size <= 1) hostFiles else emptyList()
+        }
         HostFolderExplorerDialog(
             folder = currentFolder,
             files = folderFiles,
@@ -891,13 +898,69 @@ fun HostFolderExplorerDialog(
                 }
 
                 if (directFiles.isEmpty() && subfolders.isEmpty()) {
-                    item {
-                        Text(
-                            text = "هذا المجلد فارغ",
-                            color = TextSecondary,
-                            fontSize = 12.sp,
-                            modifier = Modifier.padding(vertical = 16.dp)
-                        )
+                    if (files.isNotEmpty()) {
+                        items(files) { f ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Checkbox(
+                                    checked = selectedFileIds.contains(f.fileId),
+                                    onCheckedChange = { isChecked ->
+                                        selectedFileIds = if (isChecked) {
+                                            selectedFileIds + f.fileId
+                                        } else {
+                                            selectedFileIds - f.fileId
+                                        }
+                                    },
+                                    colors = CheckboxDefaults.colors(checkedColor = ElectricBlue),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                FileCategoryIcon(category = f.category, modifier = Modifier.size(26.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(f.name, color = TextPrimary, fontSize = 12.sp, maxLines = 1)
+                                    Text(
+                                        "${StorageUtils.formatFileSize(f.size)} • ${StorageUtils.formatDate(f.lastModified)}",
+                                        color = TextMuted,
+                                        fontSize = 10.sp
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                if (f.isBackedUp) {
+                                    Surface(
+                                        color = EmeraldOnline.copy(alpha = 0.15f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                Icons.Default.CheckCircle,
+                                                contentDescription = null,
+                                                tint = EmeraldOnline,
+                                                modifier = Modifier.size(10.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text("مرفوع", color = EmeraldOnline, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        item {
+                            Text(
+                                text = "هذا المجلد فارغ",
+                                color = TextSecondary,
+                                fontSize = 12.sp,
+                                modifier = Modifier.padding(vertical = 16.dp)
+                            )
+                        }
                     }
                 } else {
                     items(directFiles) { f ->
